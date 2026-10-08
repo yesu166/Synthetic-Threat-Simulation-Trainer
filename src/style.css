@@ -444,3 +444,274 @@ kbd{display:inline-block;min-width:18px;padding:2px 4px;margin-right:4px;border:
     width: 210px;
   }
 }
+
+/* ===== MOBILE JOYSTICK CONTROLS ===== */
+.mobile-controls {
+  display: none;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1000;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.mobile-controls.active {
+  display: block;
+}
+
+/* Joystick Container */
+.mobile-joystick {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Left Joystick - bottom left */
+.left-joystick {
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+/* Right Joystick - bottom right */
+.right-joystick {
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+/* Joystick Base */
+.joystick-base {
+  position: relative;
+  width: clamp(110px, 22vw, 165px);
+  height: clamp(110px, 22vw, 165px);
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, 
+    rgba(25, 35, 30, 0.95) 0%, 
+    rgba(10, 20, 15, 0.9) 50%, 
+    rgba(5, 12, 8, 0.95) 100%);
+  border: 2px solid rgba(52, 255, 146, 0.25);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    inset 0 2px 8px rgba(52, 255, 146, 0.08),
+    inset 0 -2px 8px rgba(0, 0, 0, 0.4);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Subtle inner ring for depth */
+.joystick-base::before {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(52, 255, 146, 0.1);
+  pointer-events: none;
+}
+
+/* Center indicator */
+.joystick-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(52, 255, 146, 0.4);
+  box-shadow: 0 0 8px rgba(52, 255, 146, 0.5);
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.15s ease;
+}
+
+/* Joystick Stick (thumb) */
+.joystick-stick {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 54%;
+  height: 54%;
+  max-width: 72px;
+  max-height: 72px;
+  min-width: 52px;
+  min-height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, 
+    rgba(40, 55, 48, 0.98) 0%, 
+    rgba(20, 35, 28, 0.95) 60%, 
+    rgba(10, 20, 14, 0.98) 100%);
+  border: 1.5px solid rgba(52, 255, 146, 0.35);
+  box-shadow: 
+    0 4px 16px rgba(0, 0, 0, 0.6),
+    inset 0 1px 4px rgba(52, 255, 146, 0.12),
+    inset 0 -1px 4px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  z-index: 2;
+  will-change: transform;
+  transition: transform 0.08s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+              box-shadow 0.1s ease;
+}
+
+/* Active state for stick */
+.joystick-base.active .joystick-stick {
+  box-shadow: 
+    0 6px 24px rgba(0, 0, 0, 0.7),
+    inset 0 1px 4px rgba(52, 255, 146, 0.2),
+    inset 0 -1px 4px rgba(0, 0, 0, 0.5),
+    0 0 20px rgba(52, 255, 146, 0.3);
+  border-color: rgba(52, 255, 146, 0.55);
+}
+
+.joystick-base.active .joystick-center {
+  opacity: 0;
+}
+
+/* Joystick Label */
+.joystick-label {
+  font-size: clamp(8px, 1.8vw, 11px);
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: rgba(52, 255, 146, 0.85);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Mobile Action Buttons */
+.mobile-actions {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: auto;
+  padding: 0 16px;
+  max-width: 90vw;
+}
+
+.mobile-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: clamp(44px, 9vw, 56px);
+  height: clamp(44px, 9vw, 56px);
+  border-radius: 10px;
+  border: 1.5px solid rgba(52, 255, 146, 0.3);
+  background: linear-gradient(180deg, 
+    rgba(18, 28, 22, 0.95) 0%, 
+    rgba(8, 16, 12, 0.9) 100%);
+  color: #d9ffe9;
+  font-size: clamp(11px, 2.2vw, 14px);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  box-shadow: 
+    0 4px 16px rgba(0, 0, 0, 0.4),
+    inset 0 1px 2px rgba(52, 255, 146, 0.1);
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.1s ease;
+}
+
+.mobile-btn:active {
+  transform: scale(0.94);
+  background: linear-gradient(180deg, 
+    rgba(10, 20, 14, 0.98) 0%, 
+    rgba(5, 12, 8, 0.95) 100%);
+  box-shadow: 
+    0 2px 8px rgba(0, 0, 0, 0.5),
+    inset 0 1px 4px rgba(52, 255, 146, 0.2);
+  border-color: rgba(52, 255, 146, 0.55);
+}
+
+.mobile-btn.primary {
+  border-color: rgba(52, 255, 146, 0.5);
+  background: linear-gradient(180deg, 
+    rgba(15, 35, 20, 0.98) 0%, 
+    rgba(8, 24, 14, 0.95) 100%);
+}
+
+.mobile-btn.primary:active {
+  background: linear-gradient(180deg, 
+    rgba(8, 24, 14, 0.98) 0%, 
+    rgba(4, 16, 8, 0.95) 100%);
+  box-shadow: 
+    0 2px 8px rgba(0, 0, 0, 0.5),
+    inset 0 1px 4px rgba(52, 255, 146, 0.3),
+    0 0 16px rgba(52, 255, 146, 0.3);
+}
+
+.mobile-btn.danger {
+  border-color: rgba(255, 68, 68, 0.5);
+  background: linear-gradient(180deg, 
+    rgba(35, 15, 15, 0.98) 0%, 
+    rgba(24, 8, 8, 0.95) 100%);
+  color: #ffaaaa;
+}
+
+.mobile-btn.danger:active {
+  background: linear-gradient(180deg, 
+    rgba(24, 8, 8, 0.98) 0%, 
+    rgba(16, 4, 4, 0.95) 100%);
+  box-shadow: 
+    0 2px 8px rgba(0, 0, 0, 0.5),
+    inset 0 1px 4px rgba(255, 68, 68, 0.3),
+    0 0 16px rgba(255, 68, 68, 0.25);
+}
+
+/* Hide desktop controls on mobile when joysticks active */
+@media (max-width: 1024px) {
+  .mobile-controls.active ~ .controls,
+  .mobile-controls.active ~ .after-action {
+    display: none;
+  }
+}
+
+/* Landscape phone adjustments */
+@media (max-height: 500px) and (orientation: landscape) {
+  .mobile-joystick {
+    gap: 4px;
+  }
+  
+  .joystick-base {
+    width: clamp(90px, 18vh, 130px);
+    height: clamp(90px, 18vh, 130px);
+  }
+  
+  .joystick-label {
+    font-size: clamp(7px, 1.6vw, 9px);
+  }
+  
+  .mobile-actions {
+    gap: 6px;
+  }
+  
+  .mobile-btn {
+    min-width: clamp(38px, 7vh, 48px);
+    height: clamp(38px, 7vh, 48px);
+    font-size: clamp(9px, 1.8vh, 12px);
+  }
+}
+
+/* Very small screens */
+@media (max-width: 360px) {
+  .joystick-base {
+    width: clamp(85px, 20vw, 120px);
+    height: clamp(85px, 20vw, 120px);
+  }
+  
+  .mobile-btn {
+    min-width: clamp(36px, 8vw, 44px);
+    height: clamp(36px, 8vw, 44px);
+    font-size: 10px;
+  }
+}

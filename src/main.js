@@ -88,6 +88,15 @@ const CONFIG = {
     shakeEnabled: true,
     shakeIntensity: 0.008,
   },
+  
+  // Mobile Controls
+  mobile: {
+    enabled: false,          // Set to true on touch devices
+    joystickSize: 140,       // Base size in px (clamped by CSS)
+    deadzone: 0.08,          // Input deadzone
+    lookSensitivity: 0.0035, // Right stick look sensitivity
+    responseCurve: 1.2,      // Gentle curve for precision
+  },
 };
 
 const state = {
@@ -216,6 +225,33 @@ const state = {
     _tmpVec3_2: new THREE.Vector3(),
     _tmpQuat: new THREE.Quaternion(),
     _tmpEuler: new THREE.Euler(),
+  },
+
+  // Mobile Controls
+  mobile: {
+    enabled: false,
+    leftJoystick: {
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      currentX: 0,
+      currentY: 0,
+      active: false,
+    },
+    rightJoystick: {
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      currentX: 0,
+      currentY: 0,
+      active: false,
+    },
+    // Normalized input values (same as keyboard/mouse)
+    moveX: 0,      // -1 to 1 (left/right strafe)
+    moveY: 0,      // -1 to 1 (forward/backward)
+    lookX: 0,      // -1 to 1 (yaw)
+    lookY: 0,      // -1 to 1 (pitch)
+    vertInput: 0,  // -1 to 1 (up/down)
   },
 };
 
@@ -1655,6 +1691,39 @@ hud.innerHTML = `
     <span>CLICK — LOCK CURSOR</span>
   </div>
 
+  <!-- Mobile Joystick Controls (hidden on desktop) -->
+  <div class="mobile-controls" id="mobileControls">
+    <!-- Left Joystick - Movement -->
+    <div class="mobile-joystick left-joystick" id="leftJoystick" role="button" aria-label="Movement control">
+      <div class="joystick-base">
+        <div class="joystick-stick" id="leftStick"></div>
+        <div class="joystick-center"></div>
+      </div>
+      <div class="joystick-label">FLIGHT</div>
+    </div>
+
+    <!-- Right Joystick - Camera Look -->
+    <div class="mobile-joystick right-joystick" id="rightJoystick" role="button" aria-label="Camera control">
+      <div class="joystick-base">
+        <div class="joystick-stick" id="rightStick"></div>
+        <div class="joystick-center"></div>
+      </div>
+      <div class="joystick-label">CAMERA</div>
+    </div>
+
+    <!-- Mobile action buttons -->
+    <div class="mobile-actions">
+      <button class="mobile-btn" id="mobileBtnAscend" aria-label="Ascend">⬆</button>
+      <button class="mobile-btn" id="mobileBtnDescend" aria-label="Descend">⬇</button>
+      <button class="mobile-btn" id="mobileBtnCycleMode" aria-label="Cycle camera mode">⟳</button>
+      <button class="mobile-btn" id="mobileBtnCycleContact" aria-label="Cycle contact/drone">⇄</button>
+      <button class="mobile-btn primary" id="mobileBtnClassify1" aria-label="Classify UNKNOWN">1</button>
+      <button class="mobile-btn primary" id="mobileBtnClassify2" aria-label="Classify BENIGN">2</button>
+      <button class="mobile-btn primary" id="mobileBtnClassify3" aria-label="Classify UAS">3</button>
+      <button class="mobile-btn danger" id="mobileBtnAAR" aria-label="After-Action Review">AAR</button>
+    </div>
+  </div>
+
   <div class="crosshair">
     <span></span><span></span><span></span><span></span>
   </div>
@@ -2005,6 +2074,323 @@ document.addEventListener("mousemove", (e) => {
   state.camera.targetPitch = clamp(state.camera.targetPitch, CONFIG.camera.pitchMin, CONFIG.camera.pitchMax);
 });
 
+// ===== MOBILE JOYSTICK HANDLING =====
+
+// Device detection
+function detectMobileControls() {
+  const hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+  const isMobileViewport = window.innerWidth <= 1024 && window.innerHeight <= 1024;
+  const isPhone = hasTouch && (window.innerWidth < 900 || window.innerHeight < 900);
+  
+  // Enable mobile controls on touch devices with phone-like viewports
+  state.mobile.enabled = isPhone;
+  
+  const mobileControlsEl = $("mobileControls");
+  if (mobileControlsEl) {
+    if (state.mobile.enabled) {
+      mobileControlsEl.classList.add("active");
+      // Hide desktop controls hint on mobile
+      const controlsEl = document.querySelector(".controls");
+      if (controlsEl) controlsEl.style.display = "none";
+    } else {
+      mobileControlsEl.classList.remove("active");
+      const controlsEl = document.querySelector(".controls");
+      if (controlsEl) controlsEl.style.display = "";
+    }
+  }
+  
+  logEvent(`Mobile controls: ${state.mobile.enabled ? "ENABLED" : "DISABLED"}`);
+}
+
+// Call on init and resize
+detectMobileControls();
+window.addEventListener("resize", () => {
+  detectMobileControls();
+});
+
+// Joystick geometry helpers
+function getJoystickCenter(el) {
+  const rect = el.getBoundingClientRect();
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+  };
+}
+
+function clampJoystick(x, y, radius) {
+  const dist = Math.sqrt(x * x + y * y);
+  if (dist > radius) {
+    const factor = radius / dist;
+    return { x: x * factor, y: y * factor };
+  }
+  return { x, y };
+}
+
+function applyDeadzone(value, deadzone) {
+  if (Math.abs(value) < deadzone) return 0;
+  // Apply response curve for better precision at low inputs
+  const sign = value > 0 ? 1 : -1;
+  const absVal = Math.abs(value);
+  const curved = Math.pow(absVal, CONFIG.mobile.responseCurve);
+  return sign * curved;
+}
+
+// Left Joystick - Movement
+const leftJoystickEl = $("leftJoystick");
+const leftStickEl = $("leftStick");
+
+if (leftJoystickEl && leftStickEl) {
+  leftJoystickEl.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    if (state.mobile.leftJoystick.active) return;
+    
+    e.preventDefault();
+    leftJoystickEl.setPointerCapture(e.pointerId);
+    
+    const center = getJoystickCenter(leftJoystickEl);
+    state.mobile.leftJoystick.pointerId = e.pointerId;
+    state.mobile.leftJoystick.startX = center.x;
+    state.mobile.leftJoystick.startY = center.y;
+    state.mobile.leftJoystick.currentX = 0;
+    state.mobile.leftJoystick.currentY = 0;
+    state.mobile.leftJoystick.active = true;
+    
+    leftJoystickEl.querySelector(".joystick-base").classList.add("active");
+  });
+  
+  leftJoystickEl.addEventListener("pointermove", (e) => {
+    if (!state.mobile.enabled) return;
+    if (state.mobile.leftJoystick.pointerId !== e.pointerId) return;
+    if (!state.mobile.leftJoystick.active) return;
+    
+    e.preventDefault();
+    const center = getJoystickCenter(leftJoystickEl);
+    const rect = leftJoystickEl.getBoundingClientRect();
+    const radius = rect.width / 2;
+    
+    let dx = e.clientX - center.x;
+    let dy = e.clientY - center.y;
+    
+    // Clamp to joystick radius
+    const clamped = clampJoystick(dx, dy, radius);
+    dx = clamped.x;
+    dy = clamped.y;
+    
+    // Normalize to -1..1
+    const normX = dx / radius;
+    const normY = -dy / radius; // Invert Y: up = forward
+    
+    // Apply deadzone and response curve
+    state.mobile.moveX = applyDeadzone(normX, CONFIG.mobile.deadzone);
+    state.mobile.moveY = applyDeadzone(normY, CONFIG.mobile.deadzone);
+    
+    // Update visual stick position
+    state.mobile.leftJoystick.currentX = dx;
+    state.mobile.leftJoystick.currentY = dy;
+    leftStickEl.style.transform = `translate(${dx}px, ${dy}px)`;
+  });
+  
+  function releaseLeftJoystick(e) {
+    if (state.mobile.leftJoystick.pointerId !== e.pointerId) return;
+    if (!state.mobile.leftJoystick.active) return;
+    
+    leftJoystickEl.releasePointerCapture(e.pointerId);
+    state.mobile.leftJoystick.active = false;
+    state.mobile.leftJoystick.pointerId = null;
+    state.mobile.moveX = 0;
+    state.mobile.moveY = 0;
+    state.mobile.leftJoystick.currentX = 0;
+    state.mobile.leftJoystick.currentY = 0;
+    leftStickEl.style.transform = "translate(0, 0)";
+    leftJoystickEl.querySelector(".joystick-base").classList.remove("active");
+  }
+  
+  leftJoystickEl.addEventListener("pointerup", releaseLeftJoystick);
+  leftJoystickEl.addEventListener("pointercancel", releaseLeftJoystick);
+  leftJoystickEl.addEventListener("pointerleave", releaseLeftJoystick);
+}
+
+// Right Joystick - Camera Look
+const rightJoystickEl = $("rightJoystick");
+const rightStickEl = $("rightStick");
+
+if (rightJoystickEl && rightStickEl) {
+  rightJoystickEl.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    if (state.mobile.rightJoystick.active) return;
+    
+    e.preventDefault();
+    rightJoystickEl.setPointerCapture(e.pointerId);
+    
+    const center = getJoystickCenter(rightJoystickEl);
+    state.mobile.rightJoystick.pointerId = e.pointerId;
+    state.mobile.rightJoystick.startX = center.x;
+    state.mobile.rightJoystick.startY = center.y;
+    state.mobile.rightJoystick.currentX = 0;
+    state.mobile.rightJoystick.currentY = 0;
+    state.mobile.rightJoystick.active = true;
+    
+    rightJoystickEl.querySelector(".joystick-base").classList.add("active");
+  });
+  
+  rightJoystickEl.addEventListener("pointermove", (e) => {
+    if (!state.mobile.enabled) return;
+    if (state.mobile.rightJoystick.pointerId !== e.pointerId) return;
+    if (!state.mobile.rightJoystick.active) return;
+    
+    e.preventDefault();
+    const center = getJoystickCenter(rightJoystickEl);
+    const rect = rightJoystickEl.getBoundingClientRect();
+    const radius = rect.width / 2;
+    
+    let dx = e.clientX - center.x;
+    let dy = e.clientY - center.y;
+    
+    // Clamp to joystick radius
+    const clamped = clampJoystick(dx, dy, radius);
+    dx = clamped.x;
+    dy = clamped.y;
+    
+    // Normalize to -1..1
+    const normX = dx / radius;
+    const normY = -dy / radius; // Invert Y: up = look up
+    
+    // Apply deadzone and response curve
+    state.mobile.lookX = applyDeadzone(normX, CONFIG.mobile.deadzone);
+    state.mobile.lookY = applyDeadzone(normY, CONFIG.mobile.deadzone);
+    
+    // Update visual stick position
+    state.mobile.rightJoystick.currentX = dx;
+    state.mobile.rightJoystick.currentY = dy;
+    rightStickEl.style.transform = `translate(${dx}px, ${dy}px)`;
+  });
+  
+  function releaseRightJoystick(e) {
+    if (state.mobile.rightJoystick.pointerId !== e.pointerId) return;
+    if (!state.mobile.rightJoystick.active) return;
+    
+    rightJoystickEl.releasePointerCapture(e.pointerId);
+    state.mobile.rightJoystick.active = false;
+    state.mobile.rightJoystick.pointerId = null;
+    state.mobile.lookX = 0;
+    state.mobile.lookY = 0;
+    state.mobile.rightJoystick.currentX = 0;
+    state.mobile.rightJoystick.currentY = 0;
+    rightStickEl.style.transform = "translate(0, 0)";
+    rightJoystickEl.querySelector(".joystick-base").classList.remove("active");
+  }
+  
+  rightJoystickEl.addEventListener("pointerup", releaseRightJoystick);
+  rightJoystickEl.addEventListener("pointercancel", releaseRightJoystick);
+  rightJoystickEl.addEventListener("pointerleave", releaseRightJoystick);
+}
+
+// Mobile Action Buttons
+const mobileBtnAscend = $("mobileBtnAscend");
+const mobileBtnDescend = $("mobileBtnDescend");
+const mobileBtnCycleMode = $("mobileBtnCycleMode");
+const mobileBtnCycleContact = $("mobileBtnCycleContact");
+const mobileBtnClassify1 = $("mobileBtnClassify1");
+const mobileBtnClassify2 = $("mobileBtnClassify2");
+const mobileBtnClassify3 = $("mobileBtnClassify3");
+const mobileBtnAAR = $("mobileBtnAAR");
+
+// Prevent default touch behavior on buttons
+[mobileBtnAscend, mobileBtnDescend, mobileBtnCycleMode, mobileBtnCycleContact, 
+ mobileBtnClassify1, mobileBtnClassify2, mobileBtnClassify3, mobileBtnAAR].forEach(btn => {
+  if (btn) {
+    btn.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+    btn.addEventListener("touchend", (e) => e.preventDefault(), { passive: false });
+  }
+});
+
+if (mobileBtnAscend) {
+  mobileBtnAscend.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    e.preventDefault();
+    state.mobile.vertInput = 1;
+  });
+  mobileBtnAscend.addEventListener("pointerup", () => { state.mobile.vertInput = 0; });
+  mobileBtnAscend.addEventListener("pointercancel", () => { state.mobile.vertInput = 0; });
+  mobileBtnAscend.addEventListener("pointerleave", () => { state.mobile.vertInput = 0; });
+}
+
+if (mobileBtnDescend) {
+  mobileBtnDescend.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    e.preventDefault();
+    state.mobile.vertInput = -1;
+  });
+  mobileBtnDescend.addEventListener("pointerup", () => { state.mobile.vertInput = 0; });
+  mobileBtnDescend.addEventListener("pointercancel", () => { state.mobile.vertInput = 0; });
+  mobileBtnDescend.addEventListener("pointerleave", () => { state.mobile.vertInput = 0; });
+}
+
+if (mobileBtnCycleMode) {
+  mobileBtnCycleMode.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    e.preventDefault();
+    cycleCameraMode();
+  });
+}
+
+if (mobileBtnCycleContact) {
+  mobileBtnCycleContact.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    e.preventDefault();
+    if (state.camera.mode === "fpv" || state.camera.mode === "chase") {
+      cycleFpvDrone(1);
+    } else {
+      cycleContact(1);
+    }
+  });
+}
+
+if (mobileBtnClassify1) {
+  mobileBtnClassify1.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    e.preventDefault();
+    state.lastDecisionKey = "Digit1";
+    evaluateSelectedContact();
+  });
+}
+
+if (mobileBtnClassify2) {
+  mobileBtnClassify2.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    e.preventDefault();
+    state.lastDecisionKey = "Digit2";
+    evaluateSelectedContact();
+  });
+}
+
+if (mobileBtnClassify3) {
+  mobileBtnClassify3.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    e.preventDefault();
+    state.lastDecisionKey = "Digit3";
+    evaluateSelectedContact();
+  });
+}
+
+if (mobileBtnAAR) {
+  mobileBtnAAR.addEventListener("pointerdown", (e) => {
+    if (!state.mobile.enabled) return;
+    e.preventDefault();
+    openAAR();
+  });
+}
+
+// Prevent scrolling on joystick areas
+document.addEventListener("touchmove", (e) => {
+  if (!state.mobile.enabled) return;
+  // Allow scrolling on non-control areas
+  const target = e.target;
+  if (target.closest(".mobile-controls")) {
+    e.preventDefault();
+  }
+}, { passive: false });
+
 // Camera mode cycling
 function cycleCameraMode() {
   const modes = ["observer", "pilot", "fpv", "chase"];
@@ -2069,8 +2455,17 @@ function lerpAngle(start, end, factor) {
 
 function updateCamera(dt) {
   const cam = state.camera;
+  const mobile = state.mobile;
   const smoothing = 1 - Math.exp(-dt * CONFIG.camera.yawSmoothing);
   const pitchSmoothing = 1 - Math.exp(-dt * CONFIG.camera.pitchSmoothing);
+  
+  // Mobile look input (right joystick)
+  if (mobile.enabled && (mobile.lookX !== 0 || mobile.lookY !== 0)) {
+    const lookSensitivity = CONFIG.mobile.lookSensitivity;
+    cam.targetYaw -= mobile.lookX * lookSensitivity * 60 * dt; // Convert to per-second
+    cam.targetPitch -= mobile.lookY * lookSensitivity * 60 * dt;
+    cam.targetPitch = clamp(cam.targetPitch, CONFIG.camera.pitchMin, CONFIG.camera.pitchMax);
+  }
   
   // Smooth yaw/pitch toward targets
   cam.yaw = lerpAngle(cam.yaw, cam.targetYaw, smoothing);
@@ -2083,6 +2478,7 @@ function updateCamera(dt) {
 function updateObserver(dt) {
   updateCamera(dt);
   const cam = state.camera;
+  const mobile = state.mobile;
   
   // Compute forward/right from camera yaw (FIXED: camera looks down -Z, so forward is -cos, -sin)
   const forward = state.camera._tmpVec3.set(-Math.sin(cam.yaw), 0, -Math.cos(cam.yaw));
@@ -2090,10 +2486,17 @@ function updateObserver(dt) {
   
   const move = state.camera._tmpVec3_2.set(0, 0, 0); // reuse
   
+  // Keyboard input
   if (state.keys.has("KeyW")) move.add(forward);
   if (state.keys.has("KeyS")) move.sub(forward);
   if (state.keys.has("KeyD")) move.add(right);
   if (state.keys.has("KeyA")) move.sub(right);
+  
+  // Mobile input (add to keyboard input)
+  if (mobile.enabled && (mobile.moveX !== 0 || mobile.moveY !== 0)) {
+    if (mobile.moveY !== 0) move.addScaledVector(forward, mobile.moveY);
+    if (mobile.moveX !== 0) move.addScaledVector(right, mobile.moveX);
+  }
   
   if (move.lengthSq() > 0) move.normalize();
   
@@ -2118,6 +2521,8 @@ function updateObserver(dt) {
   let vertInput = 0;
   if (state.keys.has("Space")) vertInput += 1;
   if (state.keys.has("ShiftLeft") || state.keys.has("ShiftRight")) vertInput -= 1;
+  // Mobile vertical input
+  if (mobile.enabled) vertInput += mobile.vertInput;
   
   if (vertInput !== 0) {
     vel.y = lerp(vel.y, vertInput * maxVertSpeed, 1 - Math.exp(-dt * accel / maxVertSpeed));
@@ -2134,7 +2539,8 @@ function updateObserver(dt) {
   camera.position.z = clamp(camera.position.z, -245, 245);
   
   // Update visual banking based on lateral acceleration
-  const latAccel = (state.keys.has("KeyA") ? -1 : 0) + (state.keys.has("KeyD") ? 1 : 0);
+  let latAccel = (state.keys.has("KeyA") ? -1 : 0) + (state.keys.has("KeyD") ? 1 : 0);
+  if (mobile.enabled) latAccel += mobile.moveX;
   cam.targetBankAngle = latAccel * CONFIG.camera.maxBankAngle;
   cam.bankAngle = lerp(cam.bankAngle, cam.targetBankAngle, 1 - Math.exp(-dt * CONFIG.camera.bankSmoothing));
   camera.rotation.z = cam.bankAngle;
@@ -2143,6 +2549,7 @@ function updateObserver(dt) {
 function updatePilot(dt) {
   updateCamera(dt);
   const cam = state.camera;
+  const mobile = state.mobile;
   
   // 6DOF movement with camera-relative directions
   const forward = state.camera._tmpVec3.set(
@@ -2155,12 +2562,20 @@ function updatePilot(dt) {
   
   const move = state.camera._tmpVec3_2.set(0, 0, 0); // reuse
   
+  // Keyboard input
   if (state.keys.has("KeyW")) move.add(forward);
   if (state.keys.has("KeyS")) move.sub(forward);
   if (state.keys.has("KeyD")) move.add(right);
   if (state.keys.has("KeyA")) move.sub(right);
   if (state.keys.has("Space")) move.add(up);
   if (state.keys.has("ControlLeft") || state.keys.has("ControlRight")) move.sub(up);
+  
+  // Mobile input
+  if (mobile.enabled && (mobile.moveX !== 0 || mobile.moveY !== 0)) {
+    if (mobile.moveY !== 0) move.addScaledVector(forward, mobile.moveY);
+    if (mobile.moveX !== 0) move.addScaledVector(right, mobile.moveX);
+    if (mobile.vertInput !== 0) move.addScaledVector(up, mobile.vertInput);
+  }
   
   if (move.lengthSq() > 0) move.normalize();
   
@@ -2189,7 +2604,8 @@ function updatePilot(dt) {
   camera.position.z = clamp(camera.position.z, -245, 245);
   
   // Banking
-  const latAccel = (state.keys.has("KeyA") ? -1 : 0) + (state.keys.has("KeyD") ? 1 : 0);
+  let latAccel = (state.keys.has("KeyA") ? -1 : 0) + (state.keys.has("KeyD") ? 1 : 0);
+  if (mobile.enabled) latAccel += mobile.moveX;
   cam.targetBankAngle = latAccel * CONFIG.camera.maxBankAngle;
   cam.bankAngle = lerp(cam.bankAngle, cam.targetBankAngle, 1 - Math.exp(-dt * CONFIG.camera.bankSmoothing));
   camera.rotation.z = cam.bankAngle;
@@ -2202,6 +2618,7 @@ function getFpvDrone() {
 function updateFPV(dt) {
   const drone = getFpvDrone();
   const cam = state.camera;
+  const mobile = state.mobile;
   if (!drone) {
     // Fallback to observer if no drone
     state.camera.mode = "observer";
@@ -2219,12 +2636,20 @@ function updateFPV(dt) {
   
   const move = state.camera._tmpVec3_2.set(0, 0, 0);
   
+  // Keyboard input
   if (state.keys.has("KeyW")) move.add(forward);
   if (state.keys.has("KeyS")) move.sub(forward);
   if (state.keys.has("KeyD")) move.add(right);
   if (state.keys.has("KeyA")) move.sub(right);
   if (state.keys.has("Space")) move.y += 1;
   if (state.keys.has("ShiftLeft") || state.keys.has("ShiftRight")) move.y -= 1;
+  
+  // Mobile input
+  if (mobile.enabled && (mobile.moveX !== 0 || mobile.moveY !== 0 || mobile.vertInput !== 0)) {
+    if (mobile.moveY !== 0) move.addScaledVector(forward, mobile.moveY);
+    if (mobile.moveX !== 0) move.addScaledVector(right, mobile.moveX);
+    if (mobile.vertInput !== 0) move.y += mobile.vertInput;
+  }
   
   if (move.lengthSq() > 0) move.normalize();
   
