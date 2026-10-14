@@ -2845,12 +2845,25 @@ function updateFPV(dt) {
   // The camera and nose share one attitude; the previous code double-applied
   // yaw/pitch and used an AI-controlled heading, making forward flight feel wrong.
   const lateralSpeed = drone.velocity.x * Math.cos(cam.yaw) - drone.velocity.z * Math.sin(cam.yaw);
+  const forwardSpeed = -drone.velocity.x * Math.sin(cam.yaw) - drone.velocity.z * Math.cos(cam.yaw);
   if (drone.motorPower) {
     cam.targetBankAngle = clamp(-lateralSpeed * 0.022, -CONFIG.camera.maxBankAngle, CONFIG.camera.maxBankAngle);
     cam.bankAngle = lerp(
       cam.bankAngle,
       cam.targetBankAngle,
       1 - Math.exp(-dt * CONFIG.camera.bankSmoothing)
+    );
+    // Small body pitch/roll response gives acceleration and lateral movement a
+    // physical cue without making the camera orientation fight the flight controls.
+    drone.body.rotation.x = lerp(
+      drone.body.rotation.x,
+      clamp(-forwardSpeed * 0.012, -0.26, 0.26),
+      1 - Math.exp(-dt * 3.5)
+    );
+    drone.body.rotation.z = lerp(
+      drone.body.rotation.z,
+      clamp(-lateralSpeed * 0.018, -0.32, 0.32),
+      1 - Math.exp(-dt * 3.5)
     );
     drone.group.rotation.set(cam.pitch, cam.yaw, cam.bankAngle, "YXZ");
   } else {
