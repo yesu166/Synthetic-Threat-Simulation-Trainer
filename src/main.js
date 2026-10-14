@@ -358,6 +358,7 @@ const motionBlurMaterial = new THREE.ShaderMaterial({
 
       if (uEnabled < 0.5 || length(blurPixels) < 0.18) {
         gl_FragColor = sharp;
+        #include <tonemapping_fragment>
         #include <colorspace_fragment>
         return;
       }
@@ -377,12 +378,13 @@ const motionBlurMaterial = new THREE.ShaderMaterial({
       }
 
       gl_FragColor = sumColor / totalWeight;
+      #include <tonemapping_fragment>
       #include <colorspace_fragment>
     }
   `,
   depthTest: false,
   depthWrite: false,
-  toneMapped: false,
+  toneMapped: true,
 });
 
 const motionBlurScene = new THREE.Scene();
@@ -405,6 +407,8 @@ document.addEventListener("visibilitychange", () => {
   motionBlur.previousYaw = null;
   motionBlur.previousPitch = null;
 });
+
+resizeMotionBlurTarget();
 
 function renderWithMotionBlur() {
   const cam = state.camera;
@@ -455,8 +459,6 @@ function renderWithMotionBlur() {
 
   const enabled = motionBlur.enabled;
   motionBlurMaterial.uniforms.uEnabled.value = enabled ? 1 : 0;
-  motionBlurMaterial.uniforms.uAngularPixels.value.copy(enabled ? motionBlur.angularPixels : motionBlur.zeroPixels);
-  motionBlurMaterial.uniforms.uLinearPixels.value.copy(enabled ? motionBlur.linearPixels : motionBlur.zeroPixels);
   motionBlurMaterial.uniforms.uRadialPixels.value = enabled ? motionBlur.radialPixels : 0;
 
   if (!enabled) {
@@ -4040,7 +4042,6 @@ function animate(now) {
     if (state.messageTimer <= 0) $("toast").classList.remove("show");
   }
 
-  resizeMotionBlurTarget();
   renderWithMotionBlur();
 }
 
