@@ -1406,12 +1406,12 @@ class SyntheticContact {
     if (!this.motorPower) {
       if (!this.landed) {
         this.velocity.y = Math.max(
-        -CONFIG.flightPhysics.terminalVelocity,
-        this.velocity.y - CONFIG.flightPhysics.gravity * dt
-      );
-      const airDrag = Math.exp(-CONFIG.flightPhysics.horizontalDrag * dt);
-      this.velocity.x *= airDrag;
-      this.velocity.z *= airDrag;
+          -CONFIG.flightPhysics.terminalVelocity,
+          this.velocity.y - CONFIG.flightPhysics.gravity * dt
+        );
+        const airDrag = Math.exp(-CONFIG.flightPhysics.horizontalDrag * dt);
+        this.velocity.x *= airDrag;
+        this.velocity.z *= airDrag;
         this.group.position.addScaledVector(this.velocity, dt);
 
         if (this.group.position.y <= CONFIG.flightPhysics.groundClearance) {
