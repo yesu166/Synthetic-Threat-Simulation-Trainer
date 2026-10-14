@@ -338,7 +338,8 @@ The training system can adjust the difficulty of future scenarios.
 | `D` | Move right |
 | `Mouse` | Look / camera control |
 | `Space` | Ascend when enabled |
-| `Shift` | Descend when enabled |
+| `Shift` | Descend |
+| `M` (FPV only) | Toggle motor power; power loss causes free fall |
 | `Q` | Select previous contact |
 | `E` | Select next contact |
 | `1` | UNKNOWN |
@@ -346,6 +347,10 @@ The training system can adjust the difficulty of future scenarios.
 | `3` | SYNTHETIC UAS |
 | `F2` | Open After-Action Review |
 | `ESC` | Release mouse pointer lock |
+
+### Flight Model
+
+In FPV mode, the controlled drone now has its own movement integration so the autonomous contact behaviour cannot overwrite pilot input. Powered mode uses stabilised flight with altitude hold when vertical input returns to neutral. Press `M` to simulate loss of motor power: lift is lost, gravity and residual horizontal drift are applied, rotor spin winds down, and the aircraft stops at ground contact. This is a deliberate failure simulation; real stabilised multirotors normally hover when the sticks are released while the flight controller and motors remain active.
 
 ### Important Control Rule
 
@@ -1286,6 +1291,7 @@ npm run preview
 | Mouse | Look |
 | `Space` | Ascend |
 | `Shift` | Descend |
+| `M` (FPV only) | Toggle motor power; OFF simulates motor failure/free fall |
 | `Q` | Previous contact |
 | `E` | Next contact |
 | `1` | Unknown |
