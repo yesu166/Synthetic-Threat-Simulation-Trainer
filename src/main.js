@@ -298,6 +298,179 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 document.body.appendChild(renderer.domElement);
 
+// GPU-side, screen-space motion blur. The HUD is HTML above the canvas, so it
+// stays crisp while the rendered scene gets a subtle blur from camera movement.
+// The target is capped by the renderer's existing pixel-ratio limit.
+const motionBlur = {
+  enabled: true,
+  previousYaw: null,
+  previousPitch: null,
+  drawingBufferSize: new THREE.Vector2(),
+  forward: new THREE.Vector3(),
+  right: new THREE.Vector3(),
+  up: new THREE.Vector3(),
+  angularPixels: new THREE.Vector2(),
+  linearPixels: new THREE.Vector2(),
+  radialPixels: 0,
+};
+
+const motionBlurTarget = new THREE.WebGLRenderTarget(1, 1, {
+  format: THREE.RGBAFormat,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  depthBuffer: true,
+  stencilBuffer: false,
+});
+motionBlurTarget.texture.generateMipmaps = false;
+motionBlurTarget.texture.colorSpace = THREE.NoColorSpace;
+
+const motionBlurMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    tDiffuse: { value: motionBlurTarget.texture },
+    uResolution: { value: new THREE.Vector2(1, 1) },
+    uAngularPixels: { value: motionBlur.angularPixels },
+    uLinearPixels: { value: motionBlur.linearPixels },
+    uRadialPixels: { value: 0 },
+    uEnabled: { value: 1 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = vec4(position.xy, 0.0, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uResolution;
+    uniform vec2 uAngularPixels;
+    uniform vec2 uLinearPixels;
+    uniform float uRadialPixels;
+    uniform float uEnabled;
+    varying vec2 vUv;
+
+    void main() {
+      vec4 sharp = texture2D(tDiffuse, vUv);
+      vec2 radialDirection = (vUv - vec2(0.5)) * 2.0;
+      vec2 blurPixels = uAngularPixels + uLinearPixels +
+                        radialDirection * uRadialPixels;
+
+      if (uEnabled < 0.5 || length(blurPixels) < 0.18) {
+        gl_FragColor = sharp;
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+        return;
+      }
+
+      vec2 offset = blurPixels / max(uResolution, vec2(1.0));
+      vec4 sumColor = sharp * 0.28;
+      float totalWeight = 0.28;
+
+      // Five symmetric taps keep the blur subtle while limiting GPU texture reads.
+      for (int i = 1; i <= 2; i++) {
+        float t = float(i) / 2.0;
+        const float weight = 0.18;
+        sumColor += texture2D(tDiffuse, clamp(vUv + offset * t, vec2(0.001), vec2(0.999))) * weight;
+        sumColor += texture2D(tDiffuse, clamp(vUv - offset * t, vec2(0.001), vec2(0.999))) * weight;
+        totalWeight += 2.0 * weight;
+      }
+
+      gl_FragColor = sumColor / totalWeight;
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }
+  `,
+  depthTest: false,
+  depthWrite: false,
+  toneMapped: true,
+});
+
+const motionBlurScene = new THREE.Scene();
+const motionBlurCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+motionBlurCamera.position.z = 1;
+const motionBlurQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), motionBlurMaterial);
+motionBlurQuad.frustumCulled = false;
+motionBlurScene.add(motionBlurQuad);
+
+function resizeMotionBlurTarget() {
+  renderer.getDrawingBufferSize(motionBlur.drawingBufferSize);
+  const { x: width, y: height } = motionBlur.drawingBufferSize;
+  if (motionBlurTarget.width !== width || motionBlurTarget.height !== height) {
+    motionBlurTarget.setSize(width, height);
+  }
+  motionBlurMaterial.uniforms.uResolution.value.copy(motionBlur.drawingBufferSize);
+}
+
+document.addEventListener("visibilitychange", () => {
+  motionBlur.previousYaw = null;
+  motionBlur.previousPitch = null;
+});
+
+resizeMotionBlurTarget();
+
+function renderWithMotionBlur() {
+  const cam = state.camera;
+  const yaw = camera.rotation.y;
+  const pitch = camera.rotation.x;
+  const size = motionBlur.drawingBufferSize;
+  const width = Math.max(1, size.x);
+  const height = Math.max(1, size.y);
+
+  let deltaYaw = 0;
+  let deltaPitch = 0;
+  if (motionBlur.previousYaw !== null && motionBlur.previousPitch !== null) {
+    deltaYaw = Math.atan2(Math.sin(yaw - motionBlur.previousYaw), Math.cos(yaw - motionBlur.previousYaw));
+    deltaPitch = pitch - motionBlur.previousPitch;
+  }
+  motionBlur.previousYaw = yaw;
+  motionBlur.previousPitch = pitch;
+
+  // Camera rotation becomes a small screen-space blur in pixels.
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+  const horizontalFov = 2 * Math.atan(Math.tan(verticalFov * 0.5) * camera.aspect);
+  const focalX = width / (2 * Math.tan(horizontalFov * 0.5));
+  const focalY = height / (2 * Math.tan(verticalFov * 0.5));
+  motionBlur.angularPixels.set(
+    THREE.MathUtils.clamp(deltaYaw * focalX * 0.48, -8, 8),
+    THREE.MathUtils.clamp(deltaPitch * focalY * 0.48, -8, 8)
+  );
+
+  // Add a restrained translation blur. Project sideways/upward travel onto the
+  // camera plane; forward travel adds a mild radial smear around image centre.
+  let velocity = cam.velocity;
+  if (cam.mode === "fpv" || cam.mode === "chase") {
+    const drone = getFpvDrone();
+    velocity = drone ? drone.velocity : cam.velocity;
+  }
+  motionBlur.forward.set(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
+  motionBlur.right.set(Math.cos(yaw), 0, -Math.sin(yaw));
+  motionBlur.up.set(-Math.sin(yaw) * Math.sin(pitch), Math.cos(pitch), -Math.cos(yaw) * Math.sin(pitch));
+  motionBlur.linearPixels.set(
+    THREE.MathUtils.clamp(-velocity.dot(motionBlur.right) * 0.14, -3, 3),
+    THREE.MathUtils.clamp(velocity.dot(motionBlur.up) * 0.14, -3, 3)
+  );
+  motionBlur.radialPixels = THREE.MathUtils.clamp(
+    velocity.dot(motionBlur.forward) * 0.18,
+    -2.8,
+    2.8
+  );
+
+  const enabled = motionBlur.enabled;
+  motionBlurMaterial.uniforms.uEnabled.value = enabled ? 1 : 0;
+  motionBlurMaterial.uniforms.uRadialPixels.value = enabled ? motionBlur.radialPixels : 0;
+
+  if (!enabled) {
+    renderer.setRenderTarget(null);
+    renderer.render(scene, camera);
+    return;
+  }
+
+  renderer.setRenderTarget(motionBlurTarget);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+  renderer.render(motionBlurScene, motionBlurCamera);
+}
+
 
 // ---------- LOW-COST PROCEDURAL SURFACE DETAIL ----------
 function makeTileTexture(draw, repeatX, repeatY) {
@@ -1791,6 +1964,7 @@ hud.innerHTML = `
     <span>M — MOTOR POWER ON/OFF (FPV)</span>
     <span>POWER OFF — FREE FALL / GROUND IMPACT</span>
     <span>MOUSE — LOOK</span>
+    <span>B — TOGGLE MOTION BLUR</span>
     <span>ESC — RELEASE MOUSE</span>
     <span>TAB — CYCLE CAMERA MODE</span>
     <span>Q / E — SELECT CONTACT / DRONE</span>
@@ -2116,6 +2290,12 @@ function onKeyDown(e) {
   }
   
   state.keys.add(e.code);
+
+  if (e.code === "KeyB" && !e.repeat) {
+    motionBlur.enabled = !motionBlur.enabled;
+    toast(motionBlur.enabled ? "MOTION BLUR ENABLED" : "MOTION BLUR DISABLED");
+    logEvent(`Motion blur ${motionBlur.enabled ? "enabled" : "disabled"}`, "info");
+  }
 
   // M simulates motor-power loss/recovery in FPV. Powered, stabilized drones
   // normally hover with neutral sticks; loss of lift causes the free-fall event.
@@ -3859,7 +4039,7 @@ function animate(now) {
     if (state.messageTimer <= 0) $("toast").classList.remove("show");
   }
 
-  renderer.render(scene, camera);
+  renderWithMotionBlur();
 }
 
 requestAnimationFrame(animate);
@@ -3874,4 +4054,5 @@ window.addEventListener("resize", () => {
   renderer.setPixelRatio(
     Math.min(window.devicePixelRatio || 1, CONFIG.maxPixelRatio)
   );
+  resizeMotionBlurTarget();
 });

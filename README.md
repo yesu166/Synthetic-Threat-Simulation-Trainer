@@ -337,6 +337,7 @@ The training system can adjust the difficulty of future scenarios.
 | `A` | Move left |
 | `D` | Move right |
 | `Mouse` | Look / camera control |
+| `B` | Toggle motion blur |
 | `Space` | Ascend when enabled |
 | `Shift` | Descend |
 | `M` (FPV only) | Toggle motor power; power loss causes free fall |
@@ -347,6 +348,10 @@ The training system can adjust the difficulty of future scenarios.
 | `3` | SYNTHETIC UAS |
 | `F2` | Open After-Action Review |
 | `ESC` | Release mouse pointer lock |
+
+### Motion Blur
+
+The scene is rendered through a lightweight GPU screen-space pass that adds a restrained blur from camera rotation and translational movement. The HTML heads-up display stays crisp. Press `B` to enable or disable the effect; the render target follows the renderer's capped drawing-buffer size, and the shader uses five symmetric samples to limit GPU cost. This is a visual approximation rather than physically exact per-object motion vectors.
 
 ### Flight Model
 
@@ -1289,6 +1294,7 @@ npm run preview
 | `A` | Left |
 | `D` | Right |
 | Mouse | Look |
+| `B` | Toggle motion blur |
 | `Space` | Ascend |
 | `Shift` | Descend |
 | `M` (FPV only) | Toggle motor power; OFF simulates motor failure/free fall |
