@@ -1120,6 +1120,7 @@ class SyntheticContact {
     this.group.rotation.order = "YXZ";
     this.body = new THREE.Group();
     this.rotors = [];
+    this.rings = [];
     this.rotorBlurDiscs = [];
     this.rotorSpin = 1;
     this.motorPower = true;
@@ -1386,7 +1387,7 @@ class SyntheticContact {
     // FPV movement is integrated by updateFPV(). Do not run the AI autopilot on
     // the same frame or it overwrites player velocity and moves the drone twice.
     if (isPilotedInFpv) {
-      const targetSpin = this.motorPower && !this.landed ? 1 : 0;
+      const targetSpin = this.motorPower ? 1 : 0;
       const spinRate = targetSpin > this.rotorSpin
         ? CONFIG.flightPhysics.motorSpinUpRate
         : CONFIG.flightPhysics.motorSpinDownRate;
@@ -1402,20 +1403,24 @@ class SyntheticContact {
 
     // Motor failure remains physical after switching camera modes: gravity,
     // aerodynamic drift, rotor spin-down and ground contact continue to update.
-    if (!this.motorPower && !this.landed) {
-      this.velocity.y = Math.max(
+    if (!this.motorPower) {
+      if (!this.landed) {
+        this.velocity.y = Math.max(
         -CONFIG.flightPhysics.terminalVelocity,
         this.velocity.y - CONFIG.flightPhysics.gravity * dt
       );
       const airDrag = Math.exp(-CONFIG.flightPhysics.horizontalDrag * dt);
       this.velocity.x *= airDrag;
       this.velocity.z *= airDrag;
-      this.group.position.addScaledVector(this.velocity, dt);
+        this.group.position.addScaledVector(this.velocity, dt);
 
-      if (this.group.position.y <= CONFIG.flightPhysics.groundClearance) {
-        this.group.position.y = CONFIG.flightPhysics.groundClearance;
+        if (this.group.position.y <= CONFIG.flightPhysics.groundClearance) {
+          this.group.position.y = CONFIG.flightPhysics.groundClearance;
+          this.velocity.set(0, 0, 0);
+          this.landed = true;
+        }
+      } else {
         this.velocity.set(0, 0, 0);
-        this.landed = true;
       }
 
       const fallTilt = clamp(-0.18 - Math.max(0, -this.velocity.y) * 0.012, -0.72, -0.18);
@@ -1428,7 +1433,7 @@ class SyntheticContact {
       }
       for (const ring of this.rings) ring.rotation.z += dt * 0.8;
       this._lookTarget.copy(this.group.position).sub(this.velocity);
-      this.group.lookAt(this._lookTarget);
+      if (this.velocity.lengthSq() > 1e-6) this.group.lookAt(this._lookTarget);
       this.track.predict(dt);
       return;
     }
