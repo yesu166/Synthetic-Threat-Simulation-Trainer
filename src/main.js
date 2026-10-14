@@ -311,7 +311,6 @@ const motionBlur = {
   up: new THREE.Vector3(),
   angularPixels: new THREE.Vector2(),
   linearPixels: new THREE.Vector2(),
-  zeroPixels: new THREE.Vector2(0, 0),
   radialPixels: 0,
 };
 
@@ -364,14 +363,13 @@ const motionBlurMaterial = new THREE.ShaderMaterial({
       }
 
       vec2 offset = blurPixels / max(uResolution, vec2(1.0));
-      vec4 sumColor = sharp * 0.24;
-      float totalWeight = 0.24;
+      vec4 sumColor = sharp * 0.28;
+      float totalWeight = 0.28;
 
-      // Seven symmetric taps avoid one-sided ghost trails and keep the effect
-      // modest enough for integrated graphics and high-DPI displays.
-      for (int i = 1; i <= 3; i++) {
-        float t = float(i) / 3.0;
-        float weight = i == 3 ? 0.10 : 0.165;
+      // Five symmetric taps keep the blur subtle while limiting GPU texture reads.
+      for (int i = 1; i <= 2; i++) {
+        float t = float(i) / 2.0;
+        const float weight = 0.18;
         sumColor += texture2D(tDiffuse, clamp(vUv + offset * t, vec2(0.001), vec2(0.999))) * weight;
         sumColor += texture2D(tDiffuse, clamp(vUv - offset * t, vec2(0.001), vec2(0.999))) * weight;
         totalWeight += 2.0 * weight;
@@ -468,7 +466,6 @@ function renderWithMotionBlur() {
   }
 
   renderer.setRenderTarget(motionBlurTarget);
-  renderer.clear();
   renderer.render(scene, camera);
   renderer.setRenderTarget(null);
   renderer.render(motionBlurScene, motionBlurCamera);
