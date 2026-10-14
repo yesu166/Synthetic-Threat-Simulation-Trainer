@@ -25,7 +25,7 @@ const CONFIG = {
   bushCount: 220,
   droneCount: 8,
   maxPixelRatio: 1.25,
-  shadowMapSize: 1536,
+  shadowMapSize: 1024,
   fogNear: 150,
   fogFar: 500,
   textureSize: 256,
@@ -89,6 +89,20 @@ const CONFIG = {
     shakeIntensity: 0.008,
   },
   
+  // Lightweight, frame-rate-independent flight model for the controlled FPV contact.
+  flightPhysics: {
+    gravity: 9.81,
+    terminalVelocity: 32.0,
+    groundClearance: 1.8,
+    horizontalAcceleration: 4.5,
+    horizontalDrag: 0.32,
+    verticalResponse: 4.5,
+    maxVerticalSpeed: 7.5,
+    rotorSpinRate: 72.0,
+    motorSpinUpRate: 5.5,
+    motorSpinDownRate: 2.8,
+  },
+
   // Mobile Controls
   mobile: {
     enabled: false,          // Set to true on touch devices
@@ -223,6 +237,9 @@ const state = {
     // Reusable vectors
     _tmpVec3: new THREE.Vector3(),
     _tmpVec3_2: new THREE.Vector3(),
+    _tmpVec3_3: new THREE.Vector3(),
+    _tmpVec3_4: new THREE.Vector3(),
+    _worldUp: new THREE.Vector3(0, 1, 0),
     _tmpQuat: new THREE.Quaternion(),
     _tmpEuler: new THREE.Euler(),
   },
@@ -383,6 +400,17 @@ for (const [name, texture] of [
   MAT[name].map = texture;
   MAT[name].needsUpdate = true;
 }
+
+// Reuse one translucent propeller-disc geometry/material across every synthetic drone.
+const ROTOR_BLUR_GEOMETRY = new THREE.CircleGeometry(1.52, 12);
+ROTOR_BLUR_GEOMETRY.rotateX(-Math.PI / 2);
+const ROTOR_BLUR_MATERIAL = new THREE.MeshBasicMaterial({
+  color: 0x161b19,
+  transparent: true,
+  opacity: 0.16,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
 
 
 // ---------- LIGHTING ----------
@@ -1089,11 +1117,19 @@ class SyntheticContact {
     this.id = id;
     this.behavior = behavior;
     this.group = new THREE.Group();
+    this.group.rotation.order = "YXZ";
     this.body = new THREE.Group();
     this.rotors = [];
-    this.rings = [];
+    this.rotorBlurDiscs = [];
+    this.rotorSpin = 1;
+    this.motorPower = true;
+    this.landed = false;
     this.velocity = new THREE.Vector3();
     this.target = new THREE.Vector3();
+    // Persistent vectors avoid per-frame Vector3 allocations.
+    this._toTarget = new THREE.Vector3();
+    this._desiredVelocity = new THREE.Vector3();
+    this._lookTarget = new THREE.Vector3();
     this.active = true;
     this.detected = false;
     this.decisionMade = false;
@@ -1157,8 +1193,14 @@ class SyntheticContact {
         rotorGroup.add(mast);
 
         const rotor = new THREE.Group();
-        const bladeA = addBox(rotor, [3.0, 0.08, 0.13], MAT.black, [0, 0, 0], [0, 0, 0], false);
-        const bladeB = addBox(rotor, [0.13, 0.08, 3.0], MAT.black, [0, 0, 0], [0, 0, 0], false);
+        addBox(rotor, [3.0, 0.08, 0.13], MAT.black, [0, 0, 0], [0, 0, 0], false);
+        addBox(rotor, [0.13, 0.08, 3.0], MAT.black, [0, 0, 0], [0, 0, 0], false);
+
+        const blurDisc = new THREE.Mesh(ROTOR_BLUR_GEOMETRY, ROTOR_BLUR_MATERIAL);
+        blurDisc.position.y = 0.045;
+        blurDisc.visible = true;
+        rotorGroup.add(blurDisc);
+        this.rotorBlurDiscs.push(blurDisc);
         rotorGroup.add(rotor);
         this.rotors.push(rotor);
 
@@ -1338,22 +1380,82 @@ class SyntheticContact {
   update(dt) {
     if (!this.active) return;
 
+    const isPilotedInFpv =
+      state.camera.mode === "fpv" && state.camera.fpvDroneId === this.id;
+
+    // FPV movement is integrated by updateFPV(). Do not run the AI autopilot on
+    // the same frame or it overwrites player velocity and moves the drone twice.
+    if (isPilotedInFpv) {
+      const targetSpin = this.motorPower && !this.landed ? 1 : 0;
+      const spinRate = targetSpin > this.rotorSpin
+        ? CONFIG.flightPhysics.motorSpinUpRate
+        : CONFIG.flightPhysics.motorSpinDownRate;
+      this.rotorSpin = lerp(this.rotorSpin, targetSpin, 1 - Math.exp(-dt * spinRate));
+      for (let i = 0; i < this.rotors.length; i++) {
+        this.rotors[i].rotation.y += dt * CONFIG.flightPhysics.rotorSpinRate * this.rotorSpin;
+        this.rotorBlurDiscs[i].visible = this.rotorSpin > 0.18;
+      }
+      for (const ring of this.rings) ring.rotation.z += dt * 0.8;
+      this.track.predict(dt);
+      return;
+    }
+
+    // Motor failure remains physical after switching camera modes: gravity,
+    // aerodynamic drift, rotor spin-down and ground contact continue to update.
+    if (!this.motorPower && !this.landed) {
+      this.velocity.y = Math.max(
+        -CONFIG.flightPhysics.terminalVelocity,
+        this.velocity.y - CONFIG.flightPhysics.gravity * dt
+      );
+      const airDrag = Math.exp(-CONFIG.flightPhysics.horizontalDrag * dt);
+      this.velocity.x *= airDrag;
+      this.velocity.z *= airDrag;
+      this.group.position.addScaledVector(this.velocity, dt);
+
+      if (this.group.position.y <= CONFIG.flightPhysics.groundClearance) {
+        this.group.position.y = CONFIG.flightPhysics.groundClearance;
+        this.velocity.set(0, 0, 0);
+        this.landed = true;
+      }
+
+      const fallTilt = clamp(-0.18 - Math.max(0, -this.velocity.y) * 0.012, -0.72, -0.18);
+      this.body.rotation.x = lerp(this.body.rotation.x, fallTilt, 1 - Math.exp(-dt * 1.2));
+      this.body.rotation.z = lerp(this.body.rotation.z, clamp(-this.velocity.x * 0.018, -0.45, 0.45), 1 - Math.exp(-dt * 1.4));
+      this.rotorSpin = lerp(this.rotorSpin, 0, 1 - Math.exp(-dt * CONFIG.flightPhysics.motorSpinDownRate));
+      for (let i = 0; i < this.rotors.length; i++) {
+        this.rotors[i].rotation.y += dt * CONFIG.flightPhysics.rotorSpinRate * this.rotorSpin;
+        this.rotorBlurDiscs[i].visible = this.rotorSpin > 0.18;
+      }
+      for (const ring of this.rings) ring.rotation.z += dt * 0.8;
+      this._lookTarget.copy(this.group.position).sub(this.velocity);
+      this.group.lookAt(this._lookTarget);
+      this.track.predict(dt);
+      return;
+    }
+
     this.updateBehavior(dt);
 
-    const toTarget = this.target.clone().sub(this.group.position);
-    const desired = toTarget.normalize().multiplyScalar(this.params.speed);
+    const toTarget = this._toTarget.subVectors(this.target, this.group.position);
+    const desired = this._desiredVelocity.copy(toTarget);
+    if (desired.lengthSq() > 1e-8) desired.normalize().multiplyScalar(this.params.speed);
+    else desired.set(0, 0, 0);
+
     this.velocity.lerp(desired, 1 - Math.pow(0.01, dt));
     this.group.position.addScaledVector(this.velocity, dt);
 
-    const look = this.group.position.clone().add(this.velocity);
-    this.group.lookAt(look);
+    // The model's nose points along local -Z, so look behind the travel vector.
+    this._lookTarget.copy(this.group.position).sub(this.velocity);
+    if (this.velocity.lengthSq() > 1e-6) this.group.lookAt(this._lookTarget);
+
     this.body.rotation.z = clamp(-this.velocity.x * 0.035, -0.35, 0.35);
     this.body.rotation.x = clamp(this.velocity.z * 0.025, -0.3, 0.3);
 
-    for (const rotor of this.rotors) rotor.rotation.y += dt * 32;
+    this.rotorSpin = lerp(this.rotorSpin, 1, 1 - Math.exp(-dt * 3));
+    for (let i = 0; i < this.rotors.length; i++) {
+      this.rotors[i].rotation.y += dt * CONFIG.flightPhysics.rotorSpinRate * this.rotorSpin;
+      this.rotorBlurDiscs[i].visible = this.rotorSpin > 0.18;
+    }
     for (const ring of this.rings) ring.rotation.z += dt * 0.8;
-
-    // Update track prediction
     this.track.predict(dt);
   }
 
@@ -1681,6 +1783,8 @@ hud.innerHTML = `
     <span>A / D — STRAFE LEFT / RIGHT</span>
     <span>SPACE — ASCEND</span>
     <span>SHIFT — DESCEND</span>
+    <span>M — MOTOR POWER ON/OFF (FPV)</span>
+    <span>POWER OFF — FREE FALL / GROUND IMPACT</span>
     <span>MOUSE — LOOK</span>
     <span>ESC — RELEASE MOUSE</span>
     <span>TAB — CYCLE CAMERA MODE</span>
@@ -1854,6 +1958,10 @@ function resetScenario() {
   for (const c of contacts) {
     c.detected = false;
     c.decisionMade = false;
+    c.motorPower = true;
+    c.rotorSpin = 1;
+    c.landed = false;
+    c.velocity.set(0, 0, 0);
     c.spawnTime = state.elapsed;
     c.actionableTime = null;
     c.firstDetectedTime = null;
@@ -2003,6 +2111,26 @@ function onKeyDown(e) {
   }
   
   state.keys.add(e.code);
+
+  // M simulates motor-power loss/recovery in FPV. Powered, stabilized drones
+  // normally hover with neutral sticks; loss of lift causes the free-fall event.
+  if (e.code === "KeyM" && !e.repeat && state.camera.mode === "fpv") {
+    e.preventDefault();
+    const drone = getFpvDrone();
+    if (drone) {
+      drone.motorPower = !drone.motorPower;
+      if (drone.motorPower) {
+        drone.landed = false;
+        drone.velocity.y = Math.max(0, drone.velocity.y);
+        toast("MOTOR POWER RESTORED — STABILIZATION ACTIVE");
+        logEvent(`Drone ${String(drone.id).padStart(2, "0")}: motor power restored`, "good");
+      } else {
+        drone.landed = false;
+        toast("MOTOR POWER LOST — FREE FALL");
+        logEvent(`Drone ${String(drone.id).padStart(2, "0")}: motor power failure`, "warn");
+      }
+    }
+  }
 
   // Camera mode switching
   if (e.code === "Tab") {
@@ -2484,7 +2612,7 @@ function updateObserver(dt) {
   const forward = state.camera._tmpVec3.set(-Math.sin(cam.yaw), 0, -Math.cos(cam.yaw));
   const right = state.camera._tmpVec3_2.set(Math.cos(cam.yaw), 0, -Math.sin(cam.yaw));
   
-  const move = state.camera._tmpVec3_2.set(0, 0, 0); // reuse
+  const move = state.camera._tmpVec3_3.set(0, 0, 0);
   
   // Keyboard input
   if (state.keys.has("KeyW")) move.add(forward);
@@ -2554,13 +2682,13 @@ function updatePilot(dt) {
   // 6DOF movement with camera-relative directions
   const forward = state.camera._tmpVec3.set(
     -Math.sin(cam.yaw) * Math.cos(cam.pitch),
-    -Math.sin(cam.pitch),
+    Math.sin(cam.pitch),
     -Math.cos(cam.yaw) * Math.cos(cam.pitch)
   );
   const right = state.camera._tmpVec3_2.set(Math.cos(cam.yaw), 0, -Math.sin(cam.yaw));
-  const up = new THREE.Vector3(0, 1, 0);
+  const up = state.camera._worldUp;
   
-  const move = state.camera._tmpVec3_2.set(0, 0, 0); // reuse
+  const move = state.camera._tmpVec3_3.set(0, 0, 0);
   
   // Keyboard input
   if (state.keys.has("KeyW")) move.add(forward);
@@ -2619,80 +2747,136 @@ function updateFPV(dt) {
   const drone = getFpvDrone();
   const cam = state.camera;
   const mobile = state.mobile;
+  const physics = CONFIG.flightPhysics;
   if (!drone) {
-    // Fallback to observer if no drone
     state.camera.mode = "observer";
     updateObserver(dt);
     return;
   }
-  
-  // Control the drone directly
-  const forward = state.camera._tmpVec3.set(
-    -Math.sin(drone.group.rotation.y) * Math.cos(drone.group.rotation.x),
-    -Math.sin(drone.group.rotation.x),
-    -Math.cos(drone.group.rotation.y) * Math.cos(drone.group.rotation.x)
-  );
-  const right = state.camera._tmpVec3_2.set(Math.cos(drone.group.rotation.y), 0, -Math.sin(drone.group.rotation.y));
-  
-  const move = state.camera._tmpVec3_2.set(0, 0, 0);
-  
-  // Keyboard input
+
+  // Mouse look steers the aircraft while powered. A powered-off aircraft keeps
+  // its attitude and follows gravity until it reaches the ground.
+  if (drone.motorPower) updateCamera(dt);
+
+  const forward = cam._tmpVec3.set(-Math.sin(cam.yaw), 0, -Math.cos(cam.yaw));
+  const right = cam._tmpVec3_2.set(Math.cos(cam.yaw), 0, -Math.sin(cam.yaw));
+  const move = cam._tmpVec3_3.set(0, 0, 0);
+
   if (state.keys.has("KeyW")) move.add(forward);
   if (state.keys.has("KeyS")) move.sub(forward);
   if (state.keys.has("KeyD")) move.add(right);
   if (state.keys.has("KeyA")) move.sub(right);
-  if (state.keys.has("Space")) move.y += 1;
-  if (state.keys.has("ShiftLeft") || state.keys.has("ShiftRight")) move.y -= 1;
-  
-  // Mobile input
-  if (mobile.enabled && (mobile.moveX !== 0 || mobile.moveY !== 0 || mobile.vertInput !== 0)) {
+  if (mobile.enabled) {
     if (mobile.moveY !== 0) move.addScaledVector(forward, mobile.moveY);
     if (mobile.moveX !== 0) move.addScaledVector(right, mobile.moveX);
-    if (mobile.vertInput !== 0) move.y += mobile.vertInput;
   }
-  
-  if (move.lengthSq() > 0) move.normalize();
-  
-  // Apply to drone's target/velocity (reuse drone's existing physics)
-  const droneSpeed = drone.params.speed;
-  const desired = move.clone().multiplyScalar(droneSpeed * 2.0); // Scale for direct control
-  drone.velocity.lerp(desired, 1 - Math.exp(-dt * 10.0));
-  
-  // Update drone orientation based on movement
-  if (drone.velocity.lengthSq() > 0.01) {
-    const look = drone.group.position.clone().add(drone.velocity);
-    drone.group.lookAt(look);
-    // Banking
-    drone.body.rotation.z = clamp(-drone.velocity.x * 0.05, -0.4, 0.4);
-    drone.body.rotation.x = clamp(drone.velocity.z * 0.03, -0.35, 0.35);
+  if (move.lengthSq() > 1) move.normalize();
+
+  let verticalInput = 0;
+  if (state.keys.has("Space")) verticalInput += 1;
+  if (state.keys.has("ShiftLeft") || state.keys.has("ShiftRight")) verticalInput -= 1;
+  if (mobile.enabled) verticalInput += mobile.vertInput;
+  verticalInput = clamp(verticalInput, -1, 1);
+
+  if (drone.motorPower) {
+    if (drone.landed && verticalInput > 0) drone.landed = false;
+
+    if (drone.landed) {
+      drone.velocity.set(0, 0, 0);
+    } else {
+      const horizontalSpeed = clamp(drone.params.speed * 1.8, 8, 20);
+      const horizontalResponse = 1 - Math.exp(-dt * physics.horizontalAcceleration);
+      const verticalResponse = 1 - Math.exp(-dt * physics.verticalResponse);
+
+      drone.velocity.x = lerp(drone.velocity.x, move.x * horizontalSpeed, horizontalResponse);
+      drone.velocity.z = lerp(drone.velocity.z, move.z * horizontalSpeed, horizontalResponse);
+
+      // Altitude hold is active while motors/flight control are healthy.
+      const targetVerticalSpeed = verticalInput * physics.maxVerticalSpeed;
+      drone.velocity.y = lerp(drone.velocity.y, targetVerticalSpeed, verticalResponse);
+    }
   } else {
-    // Return to level
-    drone.body.rotation.z = lerp(drone.body.rotation.z, 0, 1 - Math.exp(-dt * 3));
-    drone.body.rotation.x = lerp(drone.body.rotation.x, 0, 1 - Math.exp(-dt * 3));
+    const airDrag = Math.exp(-physics.horizontalDrag * dt);
+    drone.velocity.x *= airDrag;
+    drone.velocity.z *= airDrag;
+    drone.velocity.y = Math.max(
+      -physics.terminalVelocity,
+      drone.velocity.y - physics.gravity * dt
+    );
+
+    // A powerless airframe loses level attitude progressively.
+    drone.body.rotation.x = lerp(
+      drone.body.rotation.x,
+      -0.42,
+      1 - Math.exp(-dt * 1.0)
+    );
+    drone.body.rotation.z = lerp(
+      drone.body.rotation.z,
+      clamp(-drone.velocity.x * 0.018, -0.5, 0.5),
+      1 - Math.exp(-dt * 1.5)
+    );
   }
-  
-  // Camera attached to drone with offset
-  const camOffset = CONFIG.camera.fpvOffset.clone();
+
+  drone.group.position.addScaledVector(drone.velocity, dt);
+
+  const ground = physics.groundClearance;
+  if (drone.group.position.y <= ground) {
+    drone.group.position.y = ground;
+    if (drone.velocity.y < 0) drone.velocity.y = 0;
+    if (!drone.motorPower || verticalInput <= 0) {
+      drone.velocity.x = 0;
+      drone.velocity.z = 0;
+      drone.landed = true;
+    }
+  }
+  if (drone.group.position.y > 115) {
+    drone.group.position.y = 115;
+    drone.velocity.y = Math.min(0, drone.velocity.y);
+  }
+  if (Math.abs(drone.group.position.x) > 245) {
+    drone.group.position.x = clamp(drone.group.position.x, -245, 245);
+    drone.velocity.x = 0;
+  }
+  if (Math.abs(drone.group.position.z) > 245) {
+    drone.group.position.z = clamp(drone.group.position.z, -245, 245);
+    drone.velocity.z = 0;
+  }
+
+  // The camera and nose share one attitude; the previous code double-applied
+  // yaw/pitch and used an AI-controlled heading, making forward flight feel wrong.
+  const lateralSpeed = drone.velocity.x * Math.cos(cam.yaw) - drone.velocity.z * Math.sin(cam.yaw);
+  if (drone.motorPower) {
+    cam.targetBankAngle = clamp(-lateralSpeed * 0.022, -CONFIG.camera.maxBankAngle, CONFIG.camera.maxBankAngle);
+    cam.bankAngle = lerp(
+      cam.bankAngle,
+      cam.targetBankAngle,
+      1 - Math.exp(-dt * CONFIG.camera.bankSmoothing)
+    );
+    drone.group.rotation.set(cam.pitch, cam.yaw, cam.bankAngle, "YXZ");
+  } else {
+    cam.pitch = drone.group.rotation.x;
+    cam.yaw = drone.group.rotation.y;
+  }
+
+  const camOffset = cam._tmpVec3_4.copy(CONFIG.camera.fpvOffset);
   camOffset.applyQuaternion(drone.group.quaternion);
   camera.position.copy(drone.group.position).add(camOffset);
-  
-  // Camera rotation follows drone + mouse look offset
-  camera.rotation.set(
-    drone.group.rotation.x + cam.pitch,
-    drone.group.rotation.y + cam.yaw,
-    drone.group.rotation.z + cam.bankAngle,
-    "YXZ"
-  );
-  
-  // Visual banking based on drone roll
-  cam.bankAngle = lerp(cam.bankAngle, drone.group.rotation.z * 0.5, 1 - Math.exp(-dt * CONFIG.camera.bankSmoothing));
-  
-  // Dynamic FOV based on speed
+  camera.quaternion.copy(drone.group.quaternion);
+
   const speed = drone.velocity.length();
-  cam.targetFov = CONFIG.camera.fovBase + (CONFIG.camera.fovMax - CONFIG.camera.fovBase) * clamp(speed / CONFIG.camera.fovSpeed, 0, 1);
-  cam.currentFov = lerp(cam.currentFov, cam.targetFov, 1 - Math.exp(-dt * CONFIG.camera.fovSmoothing));
-  camera.fov = cam.currentFov;
-  camera.updateProjectionMatrix();
+  cam.targetFov = CONFIG.camera.fovBase +
+    (CONFIG.camera.fovMax - CONFIG.camera.fovBase) *
+    clamp(speed / CONFIG.camera.fovSpeed, 0, 1);
+  cam.currentFov = lerp(
+    cam.currentFov,
+    cam.targetFov,
+    1 - Math.exp(-dt * CONFIG.camera.fovSmoothing)
+  );
+  // Avoid recalculating the projection matrix on every tiny FOV change.
+  if (Math.abs(camera.fov - cam.currentFov) > 0.1) {
+    camera.fov = cam.currentFov;
+    camera.updateProjectionMatrix();
+  }
 }
 
 function updateChase(dt) {
@@ -2710,7 +2894,7 @@ function updateChase(dt) {
     0,
     -Math.cos(drone.group.rotation.y)
   );
-  const up = new THREE.Vector3(0, 1, 0);
+  const up = state.camera._worldUp;
   
   const desiredPos = state.camera._tmpVec3_2.copy(drone.group.position)
     .addScaledVector(back, CONFIG.camera.chaseDistance)
