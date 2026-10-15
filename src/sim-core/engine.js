@@ -68,9 +68,21 @@ export function createSimulationEngine(options = {}) {
     });
 
     for (const event of sampled.events) {
-      if (event.type === "sensor-opportunity") counters.opportunities++;
+      if (event.type === "sensor-opportunity") {
+        counters.opportunities++;
+        const targetKey = String(event.targetId);
+        const sensorReports = latestReports.get(targetKey) || new Map();
+        sensorReports.set(event.sensor, null);
+        latestReports.set(targetKey, sensorReports);
+      }
       if (event.type === "measurement") counters.detections++;
       if (event.type === "false-alarm") counters.falseAlarms++;
+    }
+    for (const [targetId, reports] of sampled.reportsByTarget) {
+      const targetKey = String(targetId);
+      const sensorReports = latestReports.get(targetKey) || new Map();
+      for (const report of reports) sensorReports.set(report.sensor, report);
+      latestReports.set(targetKey, sensorReports);
     }
     for (const measurement of sampled.measurements) {
       if (!measurement.falseAlarm && measurement.targetId !== null) {
@@ -86,8 +98,11 @@ export function createSimulationEngine(options = {}) {
     const tracks = tracker.update(sampled.measurements, time);
     const observationsByTarget = new Map();
     for (const contact of normalizedContacts) {
-      const reports = sampled.reportsByTarget.get(contact.id) || [];
+      const cachedReports = latestReports.get(contact.id) || new Map();
       const weights = scenario.sensors;
+      const reports = [...cachedReports.values()].filter((report) => (
+        report && time - report.timestamp <= weights[report.sensor].periodSeconds * 3
+      ));
       let weighted = 0;
       let total = 0;
       let radar = null;
@@ -99,7 +114,9 @@ export function createSimulationEngine(options = {}) {
       let measuredWeight = 0;
 
       for (const report of reports) {
-        const reportWeight = weights[report.sensor].weight;
+        const ageSeconds = Math.max(0, time - report.timestamp);
+        const freshness = Math.exp(-ageSeconds / Math.max(0.05, weights[report.sensor].periodSeconds * 1.8));
+        const reportWeight = weights[report.sensor].weight * freshness;
         weighted += report.confidence * reportWeight;
         total += reportWeight;
         if (report.sensor === "radar") radar = report;
@@ -117,8 +134,10 @@ export function createSimulationEngine(options = {}) {
         : null;
       const nearestTrack = measuredPosition ? nearestFrom(tracks, measuredPosition) : null;
       const fusion = total > 0 ? clamp(weighted / total, 0, 1) : 0;
+      const measurementTimestamp = reports.reduce((latest, report) => Math.max(latest, report.timestamp), -Infinity);
       const report = {
         targetId: contact.id,
+        measurementTimestamp: Number.isFinite(measurementTimestamp) ? measurementTimestamp : null,
         distance: distance(contact.position, vector(snapshot?.observerPosition)),
         range: distance(contact.position, vector(snapshot?.observerPosition)),
         radarVisible: !!radar,
@@ -252,7 +271,7 @@ export function createSimulationEngine(options = {}) {
 
   return {
     get scenario() { return scenario; },
-    rng,
+    get rng() { return rng; },
     random: () => rng.next(),
     advance,
     recordDecision,
