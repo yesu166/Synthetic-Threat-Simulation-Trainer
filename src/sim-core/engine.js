@@ -244,6 +244,17 @@ export function createSimulationEngine(options = {}) {
     };
   }
 
+  function configureSensors(overrides = {}) {
+    const sensorNames = ["radar", "visual", "rf"];
+    const sensors = { ...scenario.sensors };
+    for (const name of sensorNames) {
+      if (overrides[name]) sensors[name] = { ...scenario.sensors[name], ...overrides[name] };
+    }
+    scenario = createScenario({ ...scenario, sensors });
+    recorder.record({ type: "sensor-configuration", time: clock.simulationTime, sensors: scenario.sensors });
+    return scenario.sensors;
+  }
+
   function exportSession() {
     return recorder.export({
       scenario,
@@ -275,6 +286,7 @@ export function createSimulationEngine(options = {}) {
     random: () => rng.next(),
     advance,
     recordDecision,
+    configureSensors,
     diagnostics,
     exportSession,
     reset,
