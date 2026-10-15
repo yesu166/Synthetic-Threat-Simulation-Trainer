@@ -145,8 +145,8 @@ export function createSimulationEngine(options = {}) {
       const report = {
         targetId: contact.id,
         measurementTimestamp: Number.isFinite(measurementTimestamp) ? measurementTimestamp : null,
-        distance: rangeWeight > 0 ? rangeSum / rangeWeight : null,
-        range: rangeWeight > 0 ? rangeSum / rangeWeight : null,
+        distance: measuredPosition ? distance(measuredPosition, vector(snapshot?.observerPosition)) : null,
+        range: measuredPosition ? distance(measuredPosition, vector(snapshot?.observerPosition)) : null,
         radarVisible: !!radar,
         visualVisible: !!visual,
         rfVisible: !!rf,
