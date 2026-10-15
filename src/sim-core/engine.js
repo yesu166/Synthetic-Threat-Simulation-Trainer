@@ -24,6 +24,7 @@ export function createSimulationEngine(options = {}) {
   let latestTruth = new Map();
   let latestFrame = { time: 0, observationsByTarget: new Map(), tracks: [], measurements: [], events: [] };
   let decisions = [];
+  let frameHistory = [];
   let counters = emptyCounters();
 
   function emptyCounters() {
@@ -182,19 +183,27 @@ export function createSimulationEngine(options = {}) {
       measurementCount: sampled.measurements.length,
       trackCount: publicTracks.length
     });
+    const publicMeasurements = sampled.measurements.map((measurement) => ({
+      sensor: measurement.sensor,
+      position: { ...measurement.position },
+      confidence: measurement.confidence,
+      timestamp: measurement.timestamp,
+      falseAlarm: measurement.falseAlarm
+    }));
     latestFrame = {
       time,
       observationsByTarget,
       tracks: publicTracks,
-      measurements: sampled.measurements.map((measurement) => ({
-        sensor: measurement.sensor,
-        position: { ...measurement.position },
-        confidence: measurement.confidence,
-        timestamp: measurement.timestamp,
-        falseAlarm: measurement.falseAlarm
-      })),
+      measurements: publicMeasurements,
       events: sampled.events.map((event) => ({ ...event }))
     };
+    frameHistory.push({
+      time,
+      tracks: publicTracks.map((track) => ({ ...track, position: { ...track.position }, velocity: { ...track.velocity }, history: track.history.map((point) => ({ ...point })) })),
+      measurements: publicMeasurements.map((measurement) => ({ ...measurement })),
+      measurementCount: publicMeasurements.length
+    });
+    if (frameHistory.length > 1800) frameHistory.shift();
   }
 
   function nearestFrom(tracks, position) {
@@ -265,11 +274,17 @@ export function createSimulationEngine(options = {}) {
   }
 
   function exportSession() {
-    return recorder.export({
+    const session = recorder.export({
       scenario,
       metrics: diagnostics(),
       decisions: decisions.map((item) => ({ ...item }))
     });
+    session.replayFrames = frameHistory.map((frame) => ({
+      ...frame,
+      tracks: frame.tracks.map((track) => ({ ...track, position: { ...track.position }, velocity: { ...track.velocity }, history: track.history.map((point) => ({ ...point })) })),
+      measurements: frame.measurements.map((measurement) => ({ ...measurement }))
+    }));
+    return session;
   }
 
   function reset(seed = scenario.seed, scenarioOverrides = {}) {
@@ -282,6 +297,7 @@ export function createSimulationEngine(options = {}) {
     latestTruth = new Map();
     latestFrame = { time: 0, observationsByTarget: new Map(), tracks: [], measurements: [], events: [] };
     decisions = [];
+    frameHistory = [];
     counters = emptyCounters();
     recorder = new SessionRecorder();
     recorder.metadata = { seed: scenario.seed, scenarioId: scenario.id };
@@ -300,6 +316,7 @@ export function createSimulationEngine(options = {}) {
     exportSession,
     reset,
     getFrame: () => latestFrame,
+    getReplayFrames: () => frameHistory.map((frame) => ({ ...frame, tracks: frame.tracks.map((track) => ({ ...track, position: { ...track.position }, velocity: { ...track.velocity }, history: track.history.map((point) => ({ ...point })) })) })),
     getTracks: () => tracker.snapshot(),
     nearestTrack: (position, maxDistance) => tracker.nearest(position, maxDistance),
     getEvents: () => recorder.events.map((event) => ({ ...event }))
