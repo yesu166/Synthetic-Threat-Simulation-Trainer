@@ -224,15 +224,27 @@ export function createSimulationEngine(options = {}) {
     return latestFrame;
   }
 
-  function recordDecision({ targetId, label, confidence = 0 }) {
+  function recordDecision({ targetId, label, confidence = 0, features = {} }) {
     const target = latestTruth.get(String(targetId));
     const correct = !!target && String(label) === target.type;
+    const featureNames = [
+      "radarConfidence", "visualConfidence", "rfConfidence", "motionConfidence",
+      "trackQuality", "fusionConfidence", "estimatedRangeM", "trackUncertaintyM"
+    ];
+    const safeFeatures = {};
+    for (const name of featureNames) {
+      safeFeatures[name] = Number.isFinite(features[name]) ? Number(features[name]) : null;
+    }
+    for (const name of ["isActionable", "radarVisible", "visualVisible", "rfVisible"]) {
+      safeFeatures[name] = Boolean(features[name]);
+    }
     const decision = {
       type: "trainee-decision",
       time: clock.simulationTime,
       targetId: String(targetId),
       label: String(label),
       confidence: clamp(Number(confidence) || 0, 0, 1),
+      features: safeFeatures,
       correct,
       expected: target?.type || null
     };
