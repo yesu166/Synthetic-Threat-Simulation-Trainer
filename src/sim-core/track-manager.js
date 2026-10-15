@@ -87,7 +87,7 @@ export class TrackManager {
         candidate.sensors.add(clean.sensor);
         candidate.history.push({ time: timestamp, x: candidate.x.p, y: candidate.y.p, z: candidate.z.p });
         if (candidate.history.length > 60) candidate.history.shift();
-        candidate.residuals.push(distance(candidate.position, clean.position));
+        candidate.residuals.push(distance({ x: candidate.x.p, y: candidate.y.p, z: candidate.z.p }, clean.position));
         if (candidate.residuals.length > 60) candidate.residuals.shift();
       } else {
         const variance = Math.max(0.01, clean.variance / Math.max(0.1, clean.confidence));
@@ -121,7 +121,7 @@ export class TrackManager {
     let best = null;
     let bestDistance = Infinity;
     for (const track of this.tracks.values()) {
-      const d = distance(track.position, position);
+      const d = distance({ x: track.x.p, y: track.y.p, z: track.z.p }, position);
       const uncertainty = Math.sqrt(Math.max(1, track.x.pp + track.y.pp + track.z.pp));
       const gate = this.config.associationGate + uncertainty * 2;
       if (d <= gate && d < bestDistance) {
