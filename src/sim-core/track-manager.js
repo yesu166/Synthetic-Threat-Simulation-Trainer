@@ -60,7 +60,6 @@ export class TrackManager {
 
     // High-confidence observations get first opportunity to associate.
     const sorted = [...measurements].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
-    const usedTrackIds = new Set();
     for (const measurement of sorted) {
       const clean = {
         position: {
@@ -75,7 +74,7 @@ export class TrackManager {
         // Never propagate evaluator-only labels such as targetId into the track.
       };
       if (![clean.position.x, clean.position.y, clean.position.z].every(Number.isFinite)) continue;
-      const candidate = this._findAssociation(clean.position, usedTrackIds);
+      const candidate = this._findAssociation(clean.position);
       if (candidate) {
         const variance = Math.max(0.01, clean.variance / Math.max(0.1, clean.confidence));
         updateAxis(candidate.x, clean.position.x, variance);
@@ -86,9 +85,10 @@ export class TrackManager {
         candidate.lastMeasurementTime = timestamp;
         candidate.coasting = false;
         candidate.sensors.add(clean.sensor);
+        candidate.history.push({ time: timestamp, x: candidate.x.p, y: candidate.y.p, z: candidate.z.p });
+        if (candidate.history.length > 60) candidate.history.shift();
         candidate.residuals.push(distance(candidate.position, clean.position));
         if (candidate.residuals.length > 60) candidate.residuals.shift();
-        usedTrackIds.add(candidate.id);
       } else {
         const variance = Math.max(0.01, clean.variance / Math.max(0.1, clean.confidence));
         const track = {
@@ -103,10 +103,10 @@ export class TrackManager {
           measurementCount: 1,
           coasting: false,
           sensors: new Set([clean.sensor]),
-          residuals: []
+          residuals: [],
+          history: [{ time: timestamp, x: clean.position.x, y: clean.position.y, z: clean.position.z }]
         };
         this.tracks.set(track.id, track);
-        usedTrackIds.add(track.id);
       }
     }
 
@@ -117,11 +117,10 @@ export class TrackManager {
     return this.snapshot();
   }
 
-  _findAssociation(position, usedTrackIds) {
+  _findAssociation(position) {
     let best = null;
     let bestDistance = Infinity;
     for (const track of this.tracks.values()) {
-      if (usedTrackIds.has(track.id)) continue;
       const d = distance(track.position, position);
       const uncertainty = Math.sqrt(Math.max(1, track.x.pp + track.y.pp + track.z.pp));
       const gate = this.config.associationGate + uncertainty * 2;
@@ -150,6 +149,7 @@ export class TrackManager {
         age: track.age,
         hits: track.hits,
         sensors: [...track.sensors],
+        history: track.history.map((point) => ({ ...point })),
         lastMeasurementTime: track.lastMeasurementTime
       };
     }).sort((a, b) => a.id.localeCompare(b.id));
