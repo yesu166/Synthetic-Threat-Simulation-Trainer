@@ -44,6 +44,7 @@ The central idea is simple:
 - [After-Action Review](#after-action-review)
 - [3D Environment](#3d-environment)
 - [Technical Architecture](#technical-architecture)
+- [SPECTRA Simulation Core](#spectra-simulation-core)
 - [System Flow](#system-flow)
 - [Technology Stack](#technology-stack)
 - [Performance Engineering](#performance-engineering)
@@ -685,6 +686,55 @@ The application can be understood as several cooperating systems.
 
 ---
 
+# SPECTRA Simulation Core
+
+The browser trainer now uses SPECTRA (Synthetic Perception, Evaluation, Tracking & Replay Architecture) for the synthetic sensor and track-estimation path. This is a lightweight educational model, not a certified sensor simulator.
+
+### Live capabilities
+
+- Seeded random-number generator for repeatable scenario and sensor draws.
+- Fixed-step 1/60-second physics and sensor updates, with rendering on the browser frame loop.
+- Independent synthetic radar, visual/EO and RF report schedules, configurable ranges, missed detections, noisy position/range measurements, and false-alarm events.
+- Nearest-neighbour gated track association and constant-velocity Kalman-style state estimates with per-axis covariance, tentative/confirmed/coasting track states, velocity vectors and uncertainty rings.
+- Sensor profile editor in the HUD; change radar/EO range and measurement noise, apply the profile, and benchmark that configuration.
+- Estimated-track radar, recorded track-frame replay with a scrubber, bounded event history and downloadable session JSON.
+- A 100-seed Monte Carlo lab that reports measurement-hit rate, false alarms per minute, localization RMSE and active tracks. It is a synthetic model benchmark, not proof of real-world sensor performance.
+
+### Data boundary
+
+The scene and evaluator maintain ground truth to score trainee decisions and calculate offline metrics. Sensor models generate noisy measurements; the track manager does not consume evaluator target IDs. The radar display shows estimated tracks and uncertainty rather than plotting the true position of every contact. Session exports are instructor/evaluation artifacts and can include labelled evaluator data.
+
+### Metrics definitions
+
+- **Detection rate in the SPECTRA panel:** emitted sensor measurements divided by in-range sensor opportunities across the configured sensor models.
+- **False alarms/minute:** synthetic false-alarm reports scaled by simulated elapsed time.
+- **Localization RMSE:** offline root-mean-square distance between noisy sensor measurements and their simulator ground-truth positions.
+- **Decision accuracy:** correct explicit trainee decisions divided by recorded decisions.
+
+These definitions are prototype metrics. Compare sensor profiles using the same seed set and same simulation version.
+
+### Tests and optional offline ML baseline
+
+Run the deterministic simulation tests and production build:
+
+```bash
+npm test
+npm run build
+```
+
+The optional Python classifier baseline consumes labelled session JSON exports. Collect multiple sessions with examples from at least two classes before training:
+
+```bash
+python -m pip install -r ml/requirements.txt
+python ml/train_baseline.py ./path/to/session-exports --output artifacts/spectra-baseline.joblib
+```
+
+The script holds out sessions where class coverage permits, prints per-class precision/recall/F1 and a confusion matrix, and writes a model artifact. This baseline is **offline only**, operates on synthetic training data, and is not loaded by the live game. Do not treat its metrics as real-world threat-recognition performance.
+
+The implementation notes and limitations are in [docs/SPECTRA_ARCHITECTURE.md](docs/SPECTRA_ARCHITECTURE.md).
+
+---
+
 # System Flow
 
 The complete runtime flow is:
@@ -1305,6 +1355,8 @@ npm run preview
 | `3` | Synthetic UAS |
 | `F2` | After-Action Review |
 | `ESC` | Release pointer lock |
+| `R` | Reset the seeded training scenario |
+| SPECTRA panel | Apply radar/EO profile, replay recorded tracks, run the 100-seed benchmark, export session JSON |
 
 ---
 
@@ -1435,22 +1487,25 @@ Simulation performance should be treated as a training indicator rather than a g
 
 ## Phase 3 — Instructor Platform
 
-- [ ] Scenario editor
-- [ ] Instructor dashboard
+- [x] Seed and sensor-profile editor (prototype)
+- [x] Recorded estimated-track replay (bounded in-memory window)
+- [x] Session JSON export
+- [ ] Full instructor dashboard
 - [ ] Persistent trainee profiles
-- [ ] Session history
-- [ ] Performance graphs
-- [ ] Report generation
+- [ ] Server-backed session history
+- [ ] Longitudinal performance graphs
 
 ---
 
 ## Phase 4 — Advanced Simulation
 
-- [ ] Multi-sensor simulation
-- [ ] Sensor fusion
-- [ ] Track confidence
-- [ ] Environmental uncertainty
-- [ ] Advanced scenario generation
+- [x] Independent synthetic radar, visual and RF report models
+- [x] Weighted sensor evidence fusion
+- [x] Covariance-derived track confidence and uncertainty display
+- [x] Configurable missed detections, measurement noise and false alarms
+- [x] Seeded Monte Carlo benchmark runner
+- [ ] Higher-fidelity sensor physics and validated datasets
+- [ ] Advanced scenario-generation language
 
 ---
 
