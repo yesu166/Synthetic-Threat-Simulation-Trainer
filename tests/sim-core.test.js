@@ -88,11 +88,20 @@ test("decisions are recorded with evaluator outcome and included in export", () 
     observerPosition: { x: 0, y: 10, z: 0 },
     contacts: [{ id: "a", type: "SYNTHETIC UAS", position: { x: 10, y: 15, z: 10 }, active: true }]
   }));
-  const decision = engine.recordDecision({ targetId: "a", label: "SYNTHETIC UAS", confidence: 0.8 });
+  const decision = engine.recordDecision({
+    targetId: "a",
+    label: "SYNTHETIC UAS",
+    confidence: 0.8,
+    features: { radarConfidence: 0.7, fusionConfidence: 0.8, isActionable: true }
+  });
   assert.equal(decision.correct, true);
+  assert.equal(decision.features.radarConfidence, 0.7);
+  assert.equal(decision.features.isActionable, true);
   const exported = engine.exportSession();
   assert.equal(exported.format, "spectra-session");
   assert.equal(exported.decisions.length, 1);
+  assert.equal(exported.decisions[0].features.radarConfidence, 0.7);
+  assert.ok(exported.replayFrames.length > 0);
   assert.ok(exported.events.length > 0);
 });
 
