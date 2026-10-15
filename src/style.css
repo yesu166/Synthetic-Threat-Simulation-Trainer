@@ -864,3 +864,52 @@ kbd{display:inline-block;min-width:18px;padding:2px 4px;margin-right:4px;border:
     font-size: 7px;
   }
 }
+
+
+.spectra-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.spectra-editor-grid label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: rgba(222, 245, 255, 0.62);
+  font-size: 7px;
+  letter-spacing: 0.55px;
+}
+
+.spectra-editor-grid input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(113, 228, 255, 0.2);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.32);
+  color: #ecfbff;
+  padding: 5px 6px;
+  font: 10px ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.spectra-replay-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 7px 0;
+  color: rgba(222, 245, 255, 0.62);
+  font-size: 7px;
+  letter-spacing: 1px;
+}
+
+.spectra-replay-row input {
+  width: 100%;
+  accent-color: #52d9ff;
+}
+
+.spectra-actions #spectraApplyScenario,
+.spectra-actions #spectraReplayButton {
+  border-color: rgba(113, 228, 255, 0.34);
+}
