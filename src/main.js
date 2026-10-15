@@ -2218,6 +2218,12 @@ function resetScenario(seedOverride) {
   state.lastSpectraPhase = null;
   state.scenario.seed = nextSeed;
   state.scenario.id = "AIRSPACE-" + nextSeed;
+  state.scenario.elapsed = 0;
+  state.scenario.phaseTime = 0;
+  state.scenario.completed = false;
+  state.scenario.active = true;
+  state.afterAction = [];
+  state.selectedThreat = null;
   if ($("spectraSeed")) $("spectraSeed").value = nextSeed;
   state.score = 0;
   state.detections = 0;
@@ -2271,6 +2277,8 @@ function resetScenario(seedOverride) {
   for (const c of contacts) {
     c.params = createBehaviorParams(c.behavior, state.difficulty);
     c.initializePosition();
+    c.group.rotation.set(0, 0, 0);
+    c.body.rotation.set(0, 0, 0);
     c.lastSensorMeasurementTimestamp = null;
     c.detected = false;
     c.decisionMade = false;
