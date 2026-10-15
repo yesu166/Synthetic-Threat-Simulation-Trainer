@@ -3340,7 +3340,7 @@ function scoreTraineeDecision(contact, label, observation) {
   
   const truth = truthLabel(contact);
   const correct = label === truth;
-  spectraEngine.recordDecision({ targetId: String(contact.id), label, confidence: observation.fusion });
+  spectraEngine.recordDecision({ targetId: String(contact.id), label, confidence: observation.fusion, features: { radarConfidence: observation.radarConfidence, visualConfidence: observation.visualConfidence, rfConfidence: observation.rfConfidence, motionConfidence: observation.motionConfidence, trackQuality: observation.trackQuality, fusionConfidence: observation.fusion, estimatedRangeM: observation.distance, trackUncertaintyM: observation.trackUncertainty, isActionable: observation.isActionable, radarVisible: observation.radarVisible, visualVisible: observation.visualVisible, rfVisible: observation.rfVisible } });
 
   state.decisionCount++;
   state.metrics.decisions++;
