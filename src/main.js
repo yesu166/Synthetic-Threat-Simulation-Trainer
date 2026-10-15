@@ -1,6 +1,9 @@
 
 import * as THREE from "three";
 import "./style.css";
+import { createSimulationEngine } from "./sim-core/engine.js";
+import { FixedStepClock } from "./sim-core/clock.js";
+import { runMonteCarloBenchmark } from "./sim-core/benchmark.js";
 
 /*
   SIH26247 — AI-Enabled Drone & Counter-Drone Threat Simulation Trainer
@@ -113,6 +116,10 @@ const CONFIG = {
   },
 };
 
+const spectraEngine = createSimulationEngine({ seed: CONFIG.scenarioSeed });
+const worldClock = new FixedStepClock({ stepSeconds: 1 / 60, maxSubSteps: 5, maxFrameSeconds: 0.25 });
+let spectraFrame = null;
+
 const state = {
   mode: "observer",
   running: true,
@@ -138,6 +145,7 @@ const state = {
   decisionCount: 0,
   lastDecision: null,
   lastRadarRender: 0,
+  lastSpectraPhase: null,
 
   // Instructor/scenario layer
   scenario: {
@@ -496,10 +504,10 @@ function speckled(base, accents, repeatX = 8, repeatY = 8) {
     ctx.fillRect(0, 0, s, s);
     for (let i = 0; i < 500; i++) {
       ctx.fillStyle = accents[i % accents.length];
-      ctx.globalAlpha = 0.10 + Math.random() * 0.20;
-      const r = 0.35 + Math.random() * 1.4;
+      ctx.globalAlpha = 0.10 + spectraEngine.random() * 0.20;
+      const r = 0.35 + spectraEngine.random() * 1.4;
       ctx.beginPath();
-      ctx.arc(Math.random() * s, Math.random() * s, r, 0, Math.PI * 2);
+      ctx.arc(spectraEngine.random() * s, spectraEngine.random() * s, r, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -512,8 +520,8 @@ function concreteTex() {
     ctx.fillRect(0, 0, s, s);
     for (let i = 0; i < 120; i++) {
       ctx.fillStyle = i % 2 ? "#a0a49f" : "#4e5551";
-      ctx.globalAlpha = 0.10 + Math.random() * 0.18;
-      ctx.fillRect(Math.random() * s, Math.random() * s, 2 + Math.random() * 8, 1 + Math.random() * 3);
+      ctx.globalAlpha = 0.10 + spectraEngine.random() * 0.18;
+      ctx.fillRect(spectraEngine.random() * s, spectraEngine.random() * s, 2 + spectraEngine.random() * 8, 1 + spectraEngine.random() * 3);
     }
     ctx.globalAlpha = 1;
     ctx.strokeStyle = "rgba(25,30,28,.16)";
@@ -633,7 +641,7 @@ function addTexturedLikePanel(parent, width, height, material, position) {
 }
 
 function rand(a, b) {
-  return a + Math.random() * (b - a);
+  return a + spectraEngine.random() * (b - a);
 }
 
 function clamp(v, a, b) {
@@ -665,7 +673,7 @@ function createSky() {
 
   for (let i = 0; i < 26; i++) {
     const g = new THREE.Group();
-    const count = 3 + Math.floor(Math.random() * 5);
+    const count = 3 + Math.floor(spectraEngine.random() * 5);
     for (let j = 0; j < count; j++) {
       const puff = new THREE.Mesh(
         new THREE.SphereGeometry(rand(5, 11), 10, 6),
@@ -1308,6 +1316,7 @@ class SyntheticContact {
     this.detected = false;
     this.decisionMade = false;
     this.lastObservation = null;
+    this.lastSensorMeasurementTimestamp = null;
     this.contactType = rand(0, 1) > 0.7 ? "BENIGN AIR CONTACT" : "SYNTHETIC UAS";
     this.spawnTime = state.elapsed;
     this.actionableTime = null; // When contact first became detectable
@@ -1325,7 +1334,7 @@ class SyntheticContact {
     
     // Create associated track
     this.trackId = ++state.trackIdCounter;
-    const initialPos = this.group.position.clone();
+    const initialPos = new THREE.Vector3(0, 0, 0); // Track starts uninitialized, not at hidden truth.
     const initialVel = new THREE.Vector3(0, 0, 0);
     this.track = new TrackState(this.trackId, initialPos, initialVel, state.elapsed);
     this.track.associatedContact = this;
@@ -1783,103 +1792,73 @@ function renderTacticalRadar() {
   ctx.arc(centerX, centerY, 7, 0, Math.PI * 2);
   ctx.stroke();
   
-  // Draw contacts
-  for (const contact of contacts) {
-    if (!contact.active) continue;
-    
-    // Convert world position to radar coordinates (relative to radar station at 0,0,-130)
-    const relX = contact.group.position.x;
-    const relZ = contact.group.position.z + 130; // Radar is at z=-130
+  // Render estimated tracks only; evaluator truth positions never go directly to the display.
+  const selectedTrackId = state.selectedThreat?.lastObservation?.trackId || null;
+  for (const track of (spectraFrame?.tracks || [])) {
+    const p = track.position;
+    const relX = p.x;
+    const relZ = p.z + 130;
     const dist = Math.sqrt(relX * relX + relZ * relZ);
-    
     if (dist > TACTICAL_RADAR_RANGE) continue;
-    
-    // Radar coordinates: x = east, y = north (inverted for screen)
-    const angle = Math.atan2(relX, relZ); // atan2(x, z) for north-up
+
+    const angle = Math.atan2(relX, relZ);
     const r = (dist / TACTICAL_RADAR_RANGE) * radius;
     const px = centerX + Math.sin(angle) * r;
     const py = centerY - Math.cos(angle) * r;
-    
-    // Determine contact color and style
-    let color = "#34ff92"; // Default green for contacts
-    let isSelected = contact === state.selectedThreat;
-    let hasTrack = contact.track && contact.track.measurementCount > 0;
-    
-    if (contact.contactType === "BENIGN AIR CONTACT") {
-      color = "#ffcc00"; // Yellow for benign
-    } else if (contact.decisionMade) {
-      color = contact.classification === contact.contactType ? "#34ff92" : "#ff4444";
-    }
-    
-    if (isSelected) {
-      color = "#ff8800"; // Orange for selected
-    }
-    
-    // Draw contact blip
-    ctx.fillStyle = color;
+    const isSelected = track.id === selectedTrackId;
+    const color = isSelected ? "#ff8800" :
+      track.status === "COASTING" ? "#ffcc66" :
+      track.status === "CONFIRMED" ? "#34ff92" : "#52d9ff";
+
+    // The circle visualizes covariance-derived uncertainty; it is not a guaranteed error bound.
+    const uncertaintyRadius = clamp((track.uncertainty / TACTICAL_RADAR_RANGE) * radius, 2, radius * 0.22);
+    ctx.strokeStyle = color + "55";
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(px, py, isSelected ? 7 : 5, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Draw track history if available
-    if (hasTrack && contact.track.history.length > 1) {
-      ctx.strokeStyle = color + "80";
-      ctx.lineWidth = 1.5;
+    ctx.arc(px, py, uncertaintyRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (track.history && track.history.length > 1) {
+      ctx.strokeStyle = color + "70";
+      ctx.lineWidth = 1.2;
       ctx.beginPath();
       let first = true;
-      for (const h of contact.track.history) {
-        if (h.predicted) continue;
-        const hRelX = h.x;
-        const hRelZ = h.z + 130;
+      for (const point of track.history) {
+        const hRelX = point.x;
+        const hRelZ = point.z + 130;
         const hDist = Math.sqrt(hRelX * hRelX + hRelZ * hRelZ);
         if (hDist > TACTICAL_RADAR_RANGE) continue;
         const hAngle = Math.atan2(hRelX, hRelZ);
         const hr = (hDist / TACTICAL_RADAR_RANGE) * radius;
         const hpx = centerX + Math.sin(hAngle) * hr;
         const hpy = centerY - Math.cos(hAngle) * hr;
-        if (first) {
-          ctx.moveTo(hpx, hpy);
-          first = false;
-        } else {
-          ctx.lineTo(hpx, hpy);
-        }
+        if (first) { ctx.moveTo(hpx, hpy); first = false; }
+        else ctx.lineTo(hpx, hpy);
       }
       ctx.stroke();
     }
-    
-    // Draw velocity vector
-    if (contact.track && (contact.track.vx !== 0 || contact.track.vz !== 0)) {
-      const velLen = Math.sqrt(contact.track.vx * contact.track.vx + contact.track.vz * contact.track.vz);
-      if (velLen > 0.5) {
-        const velAngle = Math.atan2(contact.track.vx, contact.track.vz);
-        const velR = Math.min(velLen * 2, 20);
-        const vpx = px + Math.sin(velAngle) * velR;
-        const vpy = py - Math.cos(velAngle) * velR;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(px, py);
-        ctx.lineTo(vpx, vpy);
-        ctx.stroke();
-        // Arrowhead
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(vpx, vpy);
-        ctx.lineTo(vpx - Math.sin(velAngle - 0.5) * 5, vpy + Math.cos(velAngle - 0.5) * 5);
-        ctx.lineTo(vpx - Math.sin(velAngle + 0.5) * 5, vpy + Math.cos(velAngle + 0.5) * 5);
-        ctx.fill();
-      }
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(px, py, isSelected ? 6.5 : 4.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    const speed = Math.hypot(track.velocity.x, track.velocity.z);
+    if (speed > 0.5) {
+      const velAngle = Math.atan2(track.velocity.x, track.velocity.z);
+      const velocityRadius = Math.min(speed * 1.5, 18);
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + Math.sin(velAngle) * velocityRadius, py - Math.cos(velAngle) * velocityRadius);
+      ctx.stroke();
     }
-    
-    // Contact ID label
-    if (isSelected || hasTrack) {
-      ctx.fillStyle = color;
-      ctx.font = "7px Inter, Arial";
-      ctx.textAlign = "left";
-      ctx.fillText(`${contact.id}`, px + 8, py + 3);
-    }
+    ctx.fillStyle = color;
+    ctx.font = "7px Inter, Arial";
+    ctx.textAlign = "left";
+    ctx.fillText(track.id, px + 7, py + 3);
   }
-  
+
   // Draw radar sweep
   if (radar.sweep && radar.sweep.rotation) {
     const sweepAngle = radar.sweep.rotation.z || 0;
@@ -2021,6 +2000,23 @@ hud.innerHTML = `
     <div class="insight-note" id="objective">Detect and classify all synthetic aerial contacts.</div>
   </div>
 
+  <div class="panel spectra-panel" id="spectraPanel">
+    <div class="panel-title">SPECTRA SIMULATION CORE</div>
+    <div class="spectra-seed-row"><label for="spectraSeed">SCENARIO SEED</label><input id="spectraSeed" value="SIH-26247-042" maxlength="48" /></div>
+    <div class="spectra-stat-grid">
+      <div><span>TRACKS</span><b id="spectraTrackCount">0</b></div>
+      <div><span>MEAS. / TICK</span><b id="spectraMeasurementCount">0</b></div>
+      <div><span>DETECTION</span><b id="spectraDetectionRate">—</b></div>
+      <div><span>LOC. RMSE</span><b id="spectraRmse">—</b></div>
+    </div>
+    <div class="spectra-actions">
+      <button id="spectraReset">RESET SEEDED RUN</button>
+      <button id="spectraBenchmark">RUN 100-SEED LAB</button>
+      <button id="spectraExport">EXPORT SESSION JSON</button>
+    </div>
+    <div id="spectraBenchmarkResult" class="spectra-result">Seeded sensor simulation • track uncertainty • event record</div>
+  </div>
+
   <div id="aarModal" class="aar-modal">
     <div class="aar-card">
       <div class="aar-head">
@@ -2056,6 +2052,53 @@ document.body.appendChild(hud);
 const $ = (id) => document.getElementById(id);
 $("aarClose")?.addEventListener("click", closeAAR);
 
+if ($("spectraReset")) {
+  $("spectraReset").addEventListener("click", () => resetScenario($("spectraSeed")?.value));
+}
+if ($("spectraExport")) {
+  $("spectraExport").addEventListener("click", () => {
+    const payload = JSON.stringify(spectraEngine.exportSession(), null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "spectra-session-" + String(spectraEngine.scenario.seed).replace(/[^a-z0-9_-]/gi, "_") + ".json";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast("SPECTRA SESSION EXPORTED");
+  });
+}
+if ($("spectraBenchmark")) {
+  $("spectraBenchmark").addEventListener("click", async () => {
+    const button = $("spectraBenchmark");
+    const result = $("spectraBenchmarkResult");
+    button.disabled = true;
+    button.textContent = "RUNNING BENCHMARK…";
+    result.textContent = "Running 100 deterministic synthetic scenarios. The active flight simulation continues.";
+    try {
+      const report = await runMonteCarloBenchmark({
+        runs: 100,
+        seed: $("spectraSeed")?.value || CONFIG.scenarioSeed,
+        durationSeconds: 8,
+        onProgress: (done, total) => { result.textContent = "MONTE CARLO " + done + " / " + total + " seeds"; }
+      });
+      const summary = report.aggregate;
+      result.textContent = "100 RUNS • DET " + (summary.meanDetectionRate * 100).toFixed(1) +
+        "% • FALSE ALARMS/MIN " + summary.meanFalseAlarmsPerMinute.toFixed(2) +
+        " • LOCALIZATION RMSE " + (summary.meanLocalizationRmse === null ? "—" : summary.meanLocalizationRmse.toFixed(2) + "m") +
+        " • TRACKS " + summary.meanActiveTracks.toFixed(1);
+      logEvent("SPECTRA benchmark complete — " + report.runs.length + " seeded runs.", "good");
+    } catch (error) {
+      result.textContent = "BENCHMARK FAILED: " + (error?.message || String(error));
+    } finally {
+      button.disabled = false;
+      button.textContent = "RUN 100-SEED LAB";
+    }
+  });
+}
+
 function toast(message) {
   const el = $("toast");
   el.textContent = message;
@@ -2084,7 +2127,17 @@ function cycleContact(direction) {
   toast(`CONTACT ${String(state.selectedThreat.id).padStart(2, "0")} SELECTED`);
 }
 
-function resetScenario() {
+function resetScenario(seedOverride) {
+  const nextSeed = String(seedOverride ?? $("spectraSeed")?.value ?? CONFIG.scenarioSeed);
+  spectraEngine.reset(nextSeed);
+  worldClock.reset();
+  spectraFrame = null;
+  state.elapsed = 0;
+  state.lastFrame = performance.now();
+  state.lastSpectraPhase = null;
+  state.scenario.seed = nextSeed;
+  state.scenario.id = "AIRSPACE-" + nextSeed;
+  if ($("spectraSeed")) $("spectraSeed").value = nextSeed;
   state.score = 0;
   state.detections = 0;
   state.correctClassifications = 0;
@@ -2135,6 +2188,9 @@ function resetScenario() {
   camera.updateProjectionMatrix();
   
   for (const c of contacts) {
+    c.params = createBehaviorParams(c.behavior, state.difficulty);
+    c.initializePosition();
+    c.lastSensorMeasurementTimestamp = null;
     c.detected = false;
     c.decisionMade = false;
     c.motorPower = true;
@@ -2148,9 +2204,9 @@ function resetScenario() {
     c.traineeConfidence = null;
     // Reset track
     if (c.track) {
-      c.track.x = c.group.position.x;
-      c.track.y = c.group.position.y;
-      c.track.z = c.group.position.z;
+      c.track.x = 0;
+      c.track.y = 0;
+      c.track.z = 0;
       c.track.vx = 0;
       c.track.vy = 0;
       c.track.vz = 0;
@@ -2159,7 +2215,7 @@ function resetScenario() {
       c.track.measurementCount = 0;
       c.track.confidence = 0.5;
       c.track.predictionUncertainty = 1.0;
-      c.track.covariance = { px: 10, py: 10, pz: 10, pvx: 5, pvy: 5, pvz: 5 };
+      c.track.covariance = { px: 100, py: 100, pz: 100, pvx: 25, pvy: 25, pvz: 25 };
       c.track.history = [];
     }
   }
@@ -3138,72 +3194,16 @@ function addAfterAction(message, severity = "info") {
   if (state.afterAction.length > 30) state.afterAction.shift();
 }
 
-function sensorObservation(contact, distance) {
-  const s = state.sensorModel;
-  const fc = state.fusionConfig;
-
-  const radarVisible =
-    distance < s.radarRange &&
-    Math.random() > s.dropoutChance;
-
-  const visualVisible =
-    distance < s.visualRange &&
-    Math.random() > s.dropoutChance * 0.6;
-
-  const radarConfidence = radarVisible
-    ? clamp(1 - distance / s.radarRange + (Math.random() - 0.5) * s.radarNoise, 0, 1)
-    : 0;
-
-  const visualConfidence = visualVisible
-    ? clamp(1 - distance / s.visualRange + (Math.random() - 0.5) * s.visualNoise, 0, 1)
-    : 0;
-
-  // Motion consistency: how well predicted track matches observation
-  let motionConfidence = 0.5;
-  if (contact.track && contact.track.measurementCount > 2) {
-    const pred = contact.track.getPredictedPosition(0.5);
-    const actual = contact.group.position;
-    const predError = Math.sqrt(
-      Math.pow(pred.x - actual.x, 2) +
-      Math.pow(pred.y - actual.y, 2) +
-      Math.pow(pred.z - actual.z, 2)
-    );
-    motionConfidence = clamp(1 - predError / 20, 0, 1);
-  }
-
-  // Simulated RF evidence (optional)
-  const rfVisible = Math.random() > 0.7;
-  const rfConfidence = rfVisible ? clamp(0.3 + Math.random() * 0.4, 0, 1) : 0;
-
-  // Weighted fusion using configurable weights
-  const totalWeight = fc.weights.radar + fc.weights.visual + fc.weights.motion + fc.weights.rf;
-  const fusion = clamp(
-    (radarConfidence * fc.weights.radar +
-     visualConfidence * fc.weights.visual +
-     motionConfidence * fc.weights.motion +
-     rfConfidence * fc.weights.rf) / totalWeight,
-    0,
-    1
-  );
-
-  // Track quality
-  const trackQuality = contact.track ? contact.track.getQuality() : 0;
-
-  // Determine if this contact is now "actionable" (has sufficient evidence)
-  const isActionable = fusion >= fc.minConfidenceThreshold && (radarVisible || visualVisible);
-
+function sensorObservation(contact, distanceFromCamera) {
+  const observation = spectraFrame?.observationsByTarget?.get(String(contact.id));
+  if (observation) return observation;
   return {
-    radarVisible,
-    visualVisible,
-    rfVisible,
-    radarConfidence,
-    visualConfidence,
-    rfConfidence,
-    motionConfidence,
-    fusion,
-    trackQuality,
-    isActionable,
-    distance,
+    radarVisible: false, visualVisible: false, rfVisible: false,
+    radarConfidence: 0, visualConfidence: 0, rfConfidence: 0,
+    motionConfidence: 0, fusion: 0, trackQuality: 0, isActionable: false,
+    distance: distanceFromCamera, range: null, measuredPosition: null,
+    measurementTimestamp: null, trackEstimate: null, trackVelocity: null,
+    trackStatus: "UNTRACKED", trackUncertainty: null, trackId: null
   };
 }
 
@@ -3254,6 +3254,7 @@ function scoreTraineeDecision(contact, label, observation) {
   
   const truth = truthLabel(contact);
   const correct = label === truth;
+  spectraEngine.recordDecision({ targetId: String(contact.id), label, confidence: observation.fusion });
 
   state.decisionCount++;
   state.metrics.decisions++;
@@ -3329,11 +3330,7 @@ function scoreTraineeDecision(contact, label, observation) {
     calibrationPenalty, time: state.elapsed
   };
 
-  // Update track with measurement
-  if (contact.track) {
-    contact.track.update(contact.group.position, observation.fusion);
-  }
-
+  // Track updates are measurement-driven in updateDetection; decisions do not inject ground truth.
   // Update skill vector
   updateSkillVector(contact, label, observation, correct, reaction);
 
@@ -3396,6 +3393,18 @@ function updateSkillVector(contact, label, observation, correct, reaction) {
 }
 
 function updateDetection(dt) {
+  spectraFrame = spectraEngine.advance(dt, () => ({
+    observerPosition: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+    radarOrigin: { x: 0, y: 25, z: -130 },
+    contacts: contacts.filter((contact) => contact.active).map((contact) => ({
+      id: String(contact.id),
+      type: contact.contactType,
+      behavior: contact.behavior,
+      position: { x: contact.group.position.x, y: contact.group.position.y, z: contact.group.position.z },
+      velocity: { x: contact.velocity.x, y: contact.velocity.y, z: contact.velocity.z },
+      active: true
+    }))
+  }));
   let nearest = null;
   let nearestDistance = Infinity;
   let nearestObs = null;
@@ -3405,9 +3414,10 @@ function updateDetection(dt) {
   for (const contact of contacts) {
     if (!contact.active) continue;
 
-    const distance = contact.distanceToCamera();
-    const observation = sensorObservation(contact, distance);
+    const physicalDistance = contact.distanceToCamera();
+    const observation = sensorObservation(contact, physicalDistance);
     contact.lastObservation = observation;
+    const reportedDistance = Number.isFinite(observation.distance) ? observation.distance : Infinity;
 
     // Track when contact first becomes actionable
     if (observation.isActionable && !contact.actionableTime) {
@@ -3420,16 +3430,22 @@ function updateDetection(dt) {
     if (observation.radarVisible || observation.visualVisible || observation.rfVisible) visibleCount++;
     if (observation.isActionable) actionableCount++;
 
-    // Update track with measurement
-    if (contact.track && (observation.radarVisible || observation.visualVisible)) {
-      contact.track.update(contact.group.position, observation.fusion);
+    // The trainee-facing track state is updated only when a new synthetic measurement arrives.
+    if (
+      contact.track &&
+      observation.measuredPosition &&
+      Number.isFinite(observation.measurementTimestamp) &&
+      contact.lastSensorMeasurementTimestamp !== observation.measurementTimestamp
+    ) {
+      contact.track.update(observation.measuredPosition, Math.max(0.1, observation.fusion));
+      contact.lastSensorMeasurementTimestamp = observation.measurementTimestamp;
     }
 
-    // Prefer contacts that have not yet been assessed.
-    const priorityDistance = contact.decisionMade ? distance + 10000 : distance;
+    // Select by estimated range only; hidden world coordinates are reserved for evaluation.
+    const priorityDistance = contact.decisionMade ? reportedDistance + 10000 : reportedDistance;
     if (observation.fusion > 0 && priorityDistance < nearestDistance) {
       nearest = contact;
-      nearestDistance = distance;
+      nearestDistance = reportedDistance;
       nearestObs = observation;
     }
   }
@@ -3439,7 +3455,7 @@ function updateDetection(dt) {
               contacts.find(c => c.active) ||
               null;
     if (nearest) {
-      nearestDistance = nearest.distanceToCamera();
+      nearestDistance = Number.isFinite(nearest.lastObservation?.distance) ? nearest.lastObservation.distance : Infinity;
       nearestObs = nearest.lastObservation;
     }
   }
@@ -3457,9 +3473,9 @@ function updateDetection(dt) {
 
     const evidenceLabel = classifySyntheticContact(nearest, nearestObs);
     $("classification").textContent =
-      `TRACK ${String(nearest.id).padStart(2, "0")}  |  EVIDENCE: ${evidenceLabel}`;
+      `TRACK ${nearestObs.trackId || "ACQUIRING"}  |  EVIDENCE: ${evidenceLabel}`;
     $("selectedContact").textContent =
-      `CONTACT ${String(nearest.id).padStart(2, "0")} • ${nearest.decisionMade ? "ASSESSED" : "AWAITING DECISION"}`;
+      `TRACK ${nearestObs.trackId || "ACQUIRING"} • ${nearest.decisionMade ? "ASSESSED" : "AWAITING DECISION"}`;
     $("decisionHint").textContent =
       nearest.decisionMade
         ? "Q / E to inspect another contact."
@@ -3518,13 +3534,11 @@ function updateDetection(dt) {
     metrics: state.metrics,
     skillVector: state.skillVector,
     selectedContact: nearest ? {
-      id: nearest.id,
-      distance: Number(nearestDistance.toFixed(1)),
+      id: nearestObs?.trackId || null,
+      distance: Number.isFinite(nearestDistance) ? Number(nearestDistance.toFixed(1)) : null,
       evidence: nearestObs ? Number(nearestObs.fusion.toFixed(2)) : 0,
       trackQuality: nearestObs ? Number(nearestObs.trackQuality.toFixed(2)) : 0,
       assessed: !!nearest.decisionMade,
-      behavior: nearest.behavior,
-      contactType: nearest.contactType,
     } : null,
   };
 }
@@ -3540,17 +3554,20 @@ function updateSensorEvidenceDisplay(contact, observation) {
     rightPanel?.appendChild(detailEl);
   }
   
-  const trackPred = contact.track ? contact.track.getPredictedPosition(1.0) : null;
-  const predStr = trackPred 
+  const trackPred = observation.trackEstimate;
+  const predStr = trackPred
     ? `X:${trackPred.x.toFixed(1)} Y:${trackPred.y.toFixed(1)} Z:${trackPred.z.toFixed(1)}`
     : "—";
+  const velocity = observation.trackVelocity;
+  const estimatedSpeed = velocity ? Math.hypot(velocity.x, velocity.y, velocity.z) : null;
   
   detailEl.innerHTML = `
-    <div class="sensor-detail-title">SENSOR EVIDENCE — CONTACT ${String(contact.id).padStart(2, "0")}</div>
-    <div class="sensor-row"><span>RANGE</span><b>${observation.distance.toFixed(1)}m</b></div>
-    <div class="sensor-row"><span>ALTITUDE</span><b>${contact.group.position.y.toFixed(1)}m</b></div>
-    <div class="sensor-row"><span>SPEED</span><b>${contact.params.speed.toFixed(1)}m/s</b></div>
-    <div class="sensor-row"><span>BEHAVIOR</span><b>${contact.behavior}</b></div>
+    <div class="sensor-detail-title">SENSOR EVIDENCE — TRACK ${observation.trackId || "UNCONFIRMED"}</div>
+    <div class="sensor-row"><span>RANGE EST.</span><b>${Number.isFinite(observation.distance) ? observation.distance.toFixed(1) + "m" : "—"}</b></div>
+    <div class="sensor-row"><span>ALTITUDE EST.</span><b>${trackPred ? trackPred.y.toFixed(1) + "m" : "—"}</b></div>
+    <div class="sensor-row"><span>SPEED EST.</span><b>${estimatedSpeed !== null ? estimatedSpeed.toFixed(1) + "m/s" : "—"}</b></div>
+    <div class="sensor-row"><span>TRACK STATUS</span><b>${observation.trackStatus || "UNTRACKED"}</b></div>
+    <div class="sensor-row"><span>UNCERTAINTY</span><b>${Number.isFinite(observation.trackUncertainty) ? observation.trackUncertainty.toFixed(1) + "m" : "—"}</b></div>
     <hr style="border-color:rgba(255,255,255,0.1);margin:8px 0">
     <div class="sensor-row"><span>RADAR</span><b>${(observation.radarConfidence*100).toFixed(0)}%</b> ${observation.radarVisible ? "●" : "○"}</div>
     <div class="sensor-row"><span>EO/IR</span><b>${(observation.visualConfidence*100).toFixed(0)}%</b> ${observation.visualVisible ? "●" : "○"}</div>
@@ -3733,7 +3750,7 @@ function updateScenario(dt) {
           c.track.measurementCount = 0;
           c.track.confidence = 0.5;
           c.track.predictionUncertainty = 1.0;
-          c.track.covariance = { px: 10, py: 10, pz: 10, pvx: 5, pvy: 5, pvz: 5 };
+          c.track.covariance = { px: 100, py: 100, pz: 100, pvx: 25, pvy: 25, pvz: 25 };
           c.track.history = [];
         }
       }
@@ -3759,6 +3776,20 @@ function updateScenario(dt) {
     state.sensorModel.radarNoise = 0.16;
     state.sensorModel.visualNoise = 0.10;
     state.sensorModel.dropoutChance = 0.025;
+  }
+
+  if (state.lastSpectraPhase !== state.scenario.phase) {
+    state.lastSpectraPhase = state.scenario.phase;
+    spectraEngine.configureSensors({
+      radar: {
+        positionStdDev: 4 * (state.sensorModel.radarNoise / 0.16),
+        detectionProbability: clamp(0.88 - state.sensorModel.dropoutChance * 0.6, 0.5, 0.98)
+      },
+      visual: {
+        positionStdDev: 1.8 * (state.sensorModel.visualNoise / 0.10),
+        detectionProbability: clamp(0.92 - state.sensorModel.dropoutChance * 0.3, 0.55, 0.99)
+      }
+    });
   }
 }
 
@@ -3978,66 +4009,58 @@ $("mode").textContent = "OBSERVER";
 
 function animate(now) {
   requestAnimationFrame(animate);
-
-  const rawDt = Math.max(0.001, (now - state.lastFrame) / 1000);
-  const dt = Math.min(rawDt, 0.05);
+  const rawDt = Math.max(0, (now - state.lastFrame) / 1000);
   state.lastFrame = now;
 
-  state.elapsed += dt;
-
-  // FPS monitor.
-  state.fpsAccumulator += dt;
+  // FPS monitor remains tied to wall time; physics and sensor sampling use fixed steps.
+  state.fpsAccumulator += Math.min(rawDt, 0.25);
   state.fpsFrames++;
   if (state.fpsAccumulator > 1) {
     state.fps = state.fpsFrames / state.fpsAccumulator;
     state.fpsAccumulator = 0;
     state.fpsFrames = 0;
     const scale = state.fps < 42 ? 0.82 : state.fps < 52 ? 0.92 : 1.0;
-    renderer.setPixelRatio(
-      Math.min((window.devicePixelRatio || 1) * scale, CONFIG.maxPixelRatio)
-    );
+    renderer.setPixelRatio(Math.min((window.devicePixelRatio || 1) * scale, CONFIG.maxPixelRatio));
+    resizeMotionBlurTarget();
   }
 
-  // Camera mode handling
-  switch (state.camera.mode) {
-    case "observer":
-      updateObserver(dt);
-      break;
-    case "pilot":
-      updatePilot(dt);
-      break;
-    case "fpv":
-      updateFPV(dt);
-      break;
-    case "chase":
-      updateChase(dt);
-      break;
-    default:
-      updateObserver(dt);
-  }
+  worldClock.advance(rawDt, (dt) => {
+    state.elapsed += dt;
 
-  for (const contact of contacts) contact.update(dt);
+    switch (state.camera.mode) {
+      case "observer": updateObserver(dt); break;
+      case "pilot": updatePilot(dt); break;
+      case "fpv": updateFPV(dt); break;
+      case "chase": updateChase(dt); break;
+      default: updateObserver(dt);
+    }
 
-  // Update radar sweep
-  state.radarAngle += dt * 0.8;
-  if (radar.sweep) {
-    radar.sweep.rotation.z = state.radarAngle;
-    if (radar.dish) radar.dish.rotation.z = state.radarAngle;
-  }
+    for (const contact of contacts) contact.update(dt);
+    state.radarAngle += dt * 0.8;
+    if (radar.sweep) {
+      radar.sweep.rotation.z = state.radarAngle;
+      if (radar.dish) radar.dish.rotation.z = state.radarAngle;
+    }
 
-  updateDetection(dt);
-  updateScenario(dt);
+    updateDetection(dt);
+    updateScenario(dt);
 
-  // Render tactical radar (throttled to 10 FPS for performance)
-  if (!state.lastRadarRender || state.elapsed - state.lastRadarRender > 0.1) {
-    renderTacticalRadar();
-    state.lastRadarRender = state.elapsed;
-  }
+    if (!state.lastRadarRender || state.elapsed - state.lastRadarRender > 0.1) {
+      renderTacticalRadar();
+      state.lastRadarRender = state.elapsed;
+    }
 
-  if (state.messageTimer > 0) {
-    state.messageTimer -= dt;
-    if (state.messageTimer <= 0) $("toast").classList.remove("show");
-  }
+    if (state.messageTimer > 0) {
+      state.messageTimer -= dt;
+      if (state.messageTimer <= 0) $("toast").classList.remove("show");
+    }
+
+    const diagnostic = spectraEngine.diagnostics();
+    if ($("spectraTrackCount")) $("spectraTrackCount").textContent = String(spectraFrame?.tracks?.length ?? 0);
+    if ($("spectraMeasurementCount")) $("spectraMeasurementCount").textContent = String(spectraFrame?.measurements?.length ?? 0);
+    if ($("spectraDetectionRate")) $("spectraDetectionRate").textContent = (diagnostic.detectionRate * 100).toFixed(0) + "%";
+    if ($("spectraRmse")) $("spectraRmse").textContent = Number.isFinite(diagnostic.localizationRmse) ? diagnostic.localizationRmse.toFixed(1) + "m" : "—";
+  });
 
   renderWithMotionBlur();
 }
