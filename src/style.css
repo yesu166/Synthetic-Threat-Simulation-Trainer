@@ -715,3 +715,152 @@ kbd{display:inline-block;min-width:18px;padding:2px 4px;margin-right:4px;border:
     font-size: 10px;
   }
 }
+
+
+/* SPECTRA simulation-core panel */
+.spectra-panel {
+  position: absolute;
+  right: 22px;
+  bottom: 142px;
+  width: 255px;
+  max-height: 330px;
+  overflow: auto;
+  padding: 12px;
+  pointer-events: auto;
+  z-index: 8;
+  background: rgba(5, 18, 12, 0.86);
+  border-color: rgba(82, 217, 255, 0.28);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.32);
+}
+
+.spectra-panel .panel-title {
+  color: #71e4ff;
+  margin-bottom: 9px;
+  font-size: 9px;
+}
+
+.spectra-seed-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.spectra-seed-row label,
+.spectra-stat-grid span {
+  color: rgba(222, 245, 255, 0.62);
+  font-size: 8px;
+  letter-spacing: 1px;
+}
+
+.spectra-seed-row input {
+  width: 100%;
+  border: 1px solid rgba(113, 228, 255, 0.28);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.32);
+  color: #ecfbff;
+  padding: 7px 8px;
+  font: 10px ui-monospace, SFMono-Regular, Consolas, monospace;
+  outline: none;
+}
+
+.spectra-seed-row input:focus {
+  border-color: rgba(113, 228, 255, 0.75);
+}
+
+.spectra-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.spectra-stat-grid > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(113, 228, 255, 0.14);
+  background: rgba(0, 10, 14, 0.34);
+  padding: 7px;
+}
+
+.spectra-stat-grid b {
+  color: #ecfbff;
+  font: 700 14px ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.spectra-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+}
+
+.spectra-actions button {
+  border: 1px solid rgba(113, 228, 255, 0.24);
+  border-radius: 3px;
+  background: rgba(29, 93, 111, 0.35);
+  color: #e8faff;
+  padding: 7px 8px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.spectra-actions button:hover:not(:disabled) {
+  background: rgba(29, 123, 148, 0.45);
+  border-color: rgba(113, 228, 255, 0.6);
+}
+
+.spectra-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.spectra-result {
+  margin-top: 9px;
+  color: rgba(224, 246, 255, 0.72);
+  font: 8px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1000px) {
+  .spectra-panel {
+    right: 10px;
+    bottom: 112px;
+    width: 220px;
+    max-height: 255px;
+    padding: 9px;
+  }
+
+  .spectra-stat-grid b {
+    font-size: 12px;
+  }
+
+  .spectra-result {
+    font-size: 7px;
+  }
+}
+
+@media (max-width: 650px) {
+  .spectra-panel {
+    top: 66px;
+    right: 8px;
+    bottom: auto;
+    width: 188px;
+    max-height: 230px;
+  }
+
+  .spectra-panel .panel-title {
+    font-size: 8px;
+    letter-spacing: 1px;
+  }
+
+  .spectra-actions button {
+    padding: 6px;
+    font-size: 7px;
+  }
+}
