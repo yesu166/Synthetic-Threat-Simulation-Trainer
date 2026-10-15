@@ -112,6 +112,8 @@ export function createSimulationEngine(options = {}) {
       let measuredY = 0;
       let measuredZ = 0;
       let measuredWeight = 0;
+      let rangeSum = 0;
+      let rangeWeight = 0;
 
       for (const report of reports) {
         const ageSeconds = Math.max(0, time - report.timestamp);
@@ -122,11 +124,15 @@ export function createSimulationEngine(options = {}) {
         if (report.sensor === "radar") radar = report;
         if (report.sensor === "visual") visual = report;
         if (report.sensor === "rf") rf = report;
-        const w = Math.max(0.05, report.confidence) / Math.max(0.01, report.variance);
+        const w = Math.max(0.05, report.confidence * freshness) / Math.max(0.01, report.variance);
         measuredX += report.position.x * w;
         measuredY += report.position.y * w;
         measuredZ += report.position.z * w;
         measuredWeight += w;
+        if (Number.isFinite(report.rangeEstimate)) {
+          rangeSum += report.rangeEstimate * reportWeight;
+          rangeWeight += reportWeight;
+        }
       }
 
       const measuredPosition = measuredWeight > 0
@@ -138,18 +144,21 @@ export function createSimulationEngine(options = {}) {
       const report = {
         targetId: contact.id,
         measurementTimestamp: Number.isFinite(measurementTimestamp) ? measurementTimestamp : null,
-        distance: distance(contact.position, vector(snapshot?.observerPosition)),
-        range: distance(contact.position, vector(snapshot?.observerPosition)),
+        distance: rangeWeight > 0 ? rangeSum / rangeWeight : null,
+        range: rangeWeight > 0 ? rangeSum / rangeWeight : null,
         radarVisible: !!radar,
         visualVisible: !!visual,
         rfVisible: !!rf,
-        radarConfidence: radar?.confidence || 0,
-        visualConfidence: visual?.confidence || 0,
-        rfConfidence: rf?.confidence || 0,
+        radarConfidence: radar ? radar.confidence * Math.exp(-Math.max(0, time - radar.timestamp) / Math.max(0.05, weights.radar.periodSeconds * 1.8)) : 0,
+        visualConfidence: visual ? visual.confidence * Math.exp(-Math.max(0, time - visual.timestamp) / Math.max(0.05, weights.visual.periodSeconds * 1.8)) : 0,
+        rfConfidence: rf ? rf.confidence * Math.exp(-Math.max(0, time - rf.timestamp) / Math.max(0.05, weights.rf.periodSeconds * 1.8)) : 0,
         motionConfidence: nearestTrack ? clamp(1 - nearestTrack.uncertainty / 60, 0, 1) : 0,
         fusion,
         trackQuality: nearestTrack?.confidence || 0,
         trackEstimate: nearestTrack?.position || null,
+        trackVelocity: nearestTrack?.velocity || null,
+        trackStatus: nearestTrack?.status || "UNTRACKED",
+        trackUncertainty: nearestTrack?.uncertainty ?? null,
         trackId: nearestTrack?.id || null,
         measuredPosition,
         isActionable: fusion >= 0.2 && (!!radar || !!visual),
