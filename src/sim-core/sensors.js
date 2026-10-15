@@ -50,6 +50,7 @@ export function sampleSensors({ contacts, observerPosition, radarOrigin, timesta
         sensor: sensorName,
         position: measuredPosition,
         variance: Math.max(0.01, sigma * sigma),
+        rangeEstimate: Math.max(0, range + rng.normal(0, sigma * 0.2)),
         confidence,
         timestamp,
         // targetId is evaluator metadata only; TrackManager deliberately strips it.
