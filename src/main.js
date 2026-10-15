@@ -2224,6 +2224,7 @@ function resetScenario(seedOverride) {
   state.elapsed = 0;
   state.lastFrame = performance.now();
   state.lastSpectraPhase = null;
+  state.lastRadarRender = 0;
   state.scenario.seed = nextSeed;
   state.scenario.id = "AIRSPACE-" + nextSeed;
   state.scenario.elapsed = 0;
