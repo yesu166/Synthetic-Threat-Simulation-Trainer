@@ -119,6 +119,10 @@ const CONFIG = {
 const spectraEngine = createSimulationEngine({ seed: CONFIG.scenarioSeed });
 const worldClock = new FixedStepClock({ stepSeconds: 1 / 60, maxSubSteps: 5, maxFrameSeconds: 0.25 });
 let spectraFrame = null;
+let spectraReplayFrames = [];
+let spectraReplayIndex = 0;
+let spectraReplayActive = false;
+let spectraProfileOverrides = {};
 
 const state = {
   mode: "observer",
@@ -1792,9 +1796,11 @@ function renderTacticalRadar() {
   ctx.arc(centerX, centerY, 7, 0, Math.PI * 2);
   ctx.stroke();
   
+  // Replay uses immutable estimated-track snapshots from the recorder.
+  const radarFrame = spectraReplayActive ? spectraReplayFrames[spectraReplayIndex] : spectraFrame;
+  const selectedTrackId = spectraReplayActive ? null : (state.selectedThreat?.lastObservation?.trackId || null);
   // Render estimated tracks only; evaluator truth positions never go directly to the display.
-  const selectedTrackId = state.selectedThreat?.lastObservation?.trackId || null;
-  for (const track of (spectraFrame?.tracks || [])) {
+  for (const track of (radarFrame?.tracks || [])) {
     const p = track.position;
     const relX = p.x;
     const relZ = p.z + 130;
@@ -2003,6 +2009,17 @@ hud.innerHTML = `
   <div class="panel spectra-panel" id="spectraPanel">
     <div class="panel-title">SPECTRA SIMULATION CORE</div>
     <div class="spectra-seed-row"><label for="spectraSeed">SCENARIO SEED</label><input id="spectraSeed" value="SIH-26247-042" maxlength="48" /></div>
+    <div class="spectra-editor-grid">
+      <label>RADAR RANGE (m)<input id="spectraRadarRange" type="number" min="30" max="1000" step="10" value="190" /></label>
+      <label>EO RANGE (m)<input id="spectraVisualRange" type="number" min="15" max="500" step="5" value="92" /></label>
+      <label>RADAR σ (m)<input id="spectraRadarNoise" type="number" min="0.5" max="100" step="0.5" value="4" /></label>
+      <label>EO σ (m)<input id="spectraVisualNoise" type="number" min="0.2" max="100" step="0.2" value="1.8" /></label>
+    </div>
+    <div class="spectra-actions">
+      <button id="spectraApplyScenario">APPLY SENSOR PROFILE</button>
+      <button id="spectraReplayButton">REPLAY LAST 30S</button>
+    </div>
+    <label class="spectra-replay-row" for="spectraReplayRange">REPLAY POSITION <input id="spectraReplayRange" type="range" min="0" max="0" value="0" disabled /></label>
     <div class="spectra-stat-grid">
       <div><span>TRACKS</span><b id="spectraTrackCount">0</b></div>
       <div><span>MEAS. / TICK</span><b id="spectraMeasurementCount">0</b></div>
@@ -2055,6 +2072,64 @@ $("aarClose")?.addEventListener("click", closeAAR);
 if ($("spectraReset")) {
   $("spectraReset").addEventListener("click", () => resetScenario($("spectraSeed")?.value));
 }
+if ($("spectraApplyScenario")) {
+  $("spectraApplyScenario").addEventListener("click", () => {
+    const radarRange = Number($("spectraRadarRange")?.value);
+    const visualRange = Number($("spectraVisualRange")?.value);
+    const radarNoise = Number($("spectraRadarNoise")?.value);
+    const visualNoise = Number($("spectraVisualNoise")?.value);
+    if (![radarRange, visualRange, radarNoise, visualNoise].every(Number.isFinite) ||
+        radarRange < 30 || radarRange > 1000 || visualRange < 15 || visualRange > 500 ||
+        radarNoise < 0.5 || radarNoise > 100 || visualNoise < 0.2 || visualNoise > 100) {
+      $("spectraBenchmarkResult").textContent = "Invalid profile. Check sensor range/noise limits.";
+      return;
+    }
+    spectraProfileOverrides = {
+      radar: { range: radarRange, positionStdDev: radarNoise },
+      visual: { range: visualRange, positionStdDev: visualNoise }
+    };
+    try {
+      spectraEngine.configureSensors(spectraProfileOverrides);
+      $("spectraBenchmarkResult").textContent = "Sensor profile applied. Benchmark it across matched seeds.";
+      logEvent("SPECTRA sensor profile updated.", "good");
+    } catch (error) {
+      $("spectraBenchmarkResult").textContent = "PROFILE REJECTED: " + (error?.message || String(error));
+    }
+  });
+}
+if ($("spectraReplayButton")) {
+  $("spectraReplayButton").addEventListener("click", () => {
+    if (!spectraReplayActive) {
+      spectraReplayFrames = spectraEngine.getReplayFrames();
+      if (!spectraReplayFrames.length) {
+        toast("REPLAY NEEDS A FEW SECONDS OF SIMULATION");
+        return;
+      }
+      spectraReplayActive = true;
+      spectraReplayIndex = spectraReplayFrames.length - 1;
+      $("spectraReplayRange").disabled = false;
+      $("spectraReplayRange").min = "0";
+      $("spectraReplayRange").max = String(spectraReplayFrames.length - 1);
+      $("spectraReplayRange").value = String(spectraReplayIndex);
+      $("spectraReplayButton").textContent = "EXIT REPLAY VIEW";
+      $("spectraBenchmarkResult").textContent = "REPLAY VIEW • " + spectraReplayFrames.length + " recorded estimated-track frames. Live simulation continues behind the replay.";
+    } else {
+      spectraReplayActive = false;
+      spectraReplayFrames = [];
+      spectraReplayIndex = 0;
+      $("spectraReplayRange").disabled = true;
+      $("spectraReplayButton").textContent = "REPLAY LAST 30S";
+      $("spectraBenchmarkResult").textContent = "Live estimated tracks restored.";
+    }
+    renderTacticalRadar();
+  });
+}
+if ($("spectraReplayRange")) {
+  $("spectraReplayRange").addEventListener("input", () => {
+    spectraReplayIndex = Math.max(0, Math.min(spectraReplayFrames.length - 1, Number($("spectraReplayRange").value) || 0));
+    renderTacticalRadar();
+  });
+}
 if ($("spectraExport")) {
   $("spectraExport").addEventListener("click", () => {
     const payload = JSON.stringify(spectraEngine.exportSession(), null, 2);
@@ -2082,6 +2157,7 @@ if ($("spectraBenchmark")) {
         runs: 100,
         seed: $("spectraSeed")?.value || CONFIG.scenarioSeed,
         durationSeconds: 8,
+        scenarioOverrides: { sensors: spectraEngine.scenario.sensors },
         onProgress: (done, total) => { result.textContent = "MONTE CARLO " + done + " / " + total + " seeds"; }
       });
       const summary = report.aggregate;
@@ -2132,6 +2208,11 @@ function resetScenario(seedOverride) {
   spectraEngine.reset(nextSeed);
   worldClock.reset();
   spectraFrame = null;
+  spectraReplayFrames = [];
+  spectraReplayIndex = 0;
+  spectraReplayActive = false;
+  if ($("spectraReplayRange")) $("spectraReplayRange").disabled = true;
+  if ($("spectraReplayButton")) $("spectraReplayButton").textContent = "REPLAY LAST 30S";
   state.elapsed = 0;
   state.lastFrame = performance.now();
   state.lastSpectraPhase = null;
@@ -2393,6 +2474,11 @@ function onKeyDown(e) {
   if (["Digit1", "Digit2", "Digit3"].includes(e.code)) {
     state.lastDecisionKey = e.code;
     evaluateSelectedContact();
+  }
+
+  if (spectraReplayActive && ["Digit1", "Digit2", "Digit3"].includes(e.code)) {
+    toast("EXIT REPLAY VIEW BEFORE SUBMITTING A DECISION");
+    return;
   }
 
   if (e.code === "F2") {
@@ -3783,11 +3869,13 @@ function updateScenario(dt) {
     spectraEngine.configureSensors({
       radar: {
         positionStdDev: 4 * (state.sensorModel.radarNoise / 0.16),
-        detectionProbability: clamp(0.88 - state.sensorModel.dropoutChance * 0.6, 0.5, 0.98)
+        detectionProbability: clamp(0.88 - state.sensorModel.dropoutChance * 0.6, 0.5, 0.98),
+        ...(spectraProfileOverrides.radar || {})
       },
       visual: {
         positionStdDev: 1.8 * (state.sensorModel.visualNoise / 0.10),
-        detectionProbability: clamp(0.92 - state.sensorModel.dropoutChance * 0.3, 0.55, 0.99)
+        detectionProbability: clamp(0.92 - state.sensorModel.dropoutChance * 0.3, 0.55, 0.99),
+        ...(spectraProfileOverrides.visual || {})
       }
     });
   }
