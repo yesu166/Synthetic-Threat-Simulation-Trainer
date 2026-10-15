@@ -2,6 +2,7 @@
 import * as THREE from "three";
 import "./style.css";
 import { createSimulationEngine } from "./sim-core/engine.js";
+import { SeededRandom } from "./sim-core/random.js";
 import { FixedStepClock } from "./sim-core/clock.js";
 import { runMonteCarloBenchmark } from "./sim-core/benchmark.js";
 
@@ -117,6 +118,7 @@ const CONFIG = {
 };
 
 const spectraEngine = createSimulationEngine({ seed: CONFIG.scenarioSeed });
+const sceneRandom = new SeededRandom("SPECTRA-SCENE-ASSETS");
 const worldClock = new FixedStepClock({ stepSeconds: 1 / 60, maxSubSteps: 5, maxFrameSeconds: 0.25 });
 let spectraFrame = null;
 let spectraReplayFrames = [];
@@ -646,7 +648,11 @@ function addTexturedLikePanel(parent, width, height, material, position) {
 }
 
 function rand(a, b) {
-  return a + spectraEngine.random() * (b - a);
+  return sceneRandom.range(a, b);
+}
+
+function simRand(a, b) {
+  return spectraEngine.random() * (b - a) + a;
 }
 
 function clamp(v, a, b) {
@@ -1232,66 +1238,66 @@ function createBehaviorParams(behavior, difficulty) {
   const baseSpeed = 5.5 + difficulty * 0.8;
   const params = {
     speed: baseSpeed,
-    altitude: rand(24, 62),
-    radius: rand(45, 145),
-    angle: rand(0, Math.PI * 2),
-    phase: rand(0, Math.PI * 2),
-    targetAltitude: rand(24, 62),
+    altitude: simRand(24, 62),
+    radius: simRand(45, 145),
+    angle: simRand(0, Math.PI * 2),
+    phase: simRand(0, Math.PI * 2),
+    targetAltitude: simRand(24, 62),
     targetPosition: null,
     waypoints: [],
     waypointIndex: 0,
     erraticTimer: 0,
-    erraticInterval: rand(1, 3),
-    crossingDirection: rand(0, 1) > 0.5 ? 1 : -1,
+    erraticInterval: simRand(1, 3),
+    crossingDirection: simRand(0, 1) > 0.5 ? 1 : -1,
   };
 
   switch (behavior) {
     case CONTACT_BEHAVIORS.CRUISE:
       params.speed = baseSpeed * 1.0;
-      params.altitude = rand(35, 55);
-      params.radius = rand(80, 160);
+      params.altitude = simRand(35, 55);
+      params.radius = simRand(80, 160);
       break;
     case CONTACT_BEHAVIORS.LOITER:
       params.speed = baseSpeed * 0.4;
-      params.altitude = rand(20, 40);
-      params.radius = rand(30, 80);
+      params.altitude = simRand(20, 40);
+      params.radius = simRand(30, 80);
       break;
     case CONTACT_BEHAVIORS.APPROACH:
       params.speed = baseSpeed * 1.3;
       params.targetPosition = new THREE.Vector3(
-        rand(-50, 50),
-        rand(25, 45),
-        rand(-50, 50)
+        simRand(-50, 50),
+        simRand(25, 45),
+        simRand(-50, 50)
       );
       break;
     case CONTACT_BEHAVIORS.DEPART:
       params.speed = baseSpeed * 1.2;
       params.targetPosition = new THREE.Vector3(
-        rand(-200, 200),
-        rand(40, 70),
-        rand(-200, 200)
+        simRand(-200, 200),
+        simRand(40, 70),
+        simRand(-200, 200)
       );
       break;
     case CONTACT_BEHAVIORS.ERRATIC:
-      params.speed = baseSpeed * rand(0.6, 1.4);
-      params.erraticInterval = rand(0.8, 2.5);
+      params.speed = baseSpeed * simRand(0.6, 1.4);
+      params.erraticInterval = simRand(0.8, 2.5);
       break;
     case CONTACT_BEHAVIORS.CROSSING:
       params.speed = baseSpeed * 1.1;
-      params.altitude = rand(30, 50);
+      params.altitude = simRand(30, 50);
       params.targetPosition = new THREE.Vector3(
         params.crossingDirection * 200,
         params.altitude,
-        rand(-100, 100)
+        simRand(-100, 100)
       );
       break;
     case CONTACT_BEHAVIORS.SLOW:
       params.speed = baseSpeed * 0.35;
-      params.altitude = rand(15, 35);
+      params.altitude = simRand(15, 35);
       break;
     case CONTACT_BEHAVIORS.FAST:
       params.speed = baseSpeed * 1.8;
-      params.altitude = rand(40, 70);
+      params.altitude = simRand(40, 70);
       break;
   }
 
@@ -1322,7 +1328,7 @@ class SyntheticContact {
     this.decisionMade = false;
     this.lastObservation = null;
     this.lastSensorMeasurementTimestamp = null;
-    this.contactType = rand(0, 1) > 0.7 ? "BENIGN AIR CONTACT" : "SYNTHETIC UAS";
+    this.contactType = simRand(0, 1) > 0.7 ? "BENIGN AIR CONTACT" : "SYNTHETIC UAS";
     this.spawnTime = state.elapsed;
     this.actionableTime = null; // When contact first became detectable
     this.firstDetectedTime = null;
@@ -1445,17 +1451,17 @@ class SyntheticContact {
         break;
       case CONTACT_BEHAVIORS.APPROACH:
         this.group.position.set(
-          rand(-200, 200),
+          simRand(-200, 200),
           p.altitude,
-          rand(-200, -100)
+          simRand(-200, -100)
         );
         this.initialPosition.copy(this.group.position);
         break;
       case CONTACT_BEHAVIORS.DEPART:
         this.group.position.set(
-          rand(-50, 50),
+          simRand(-50, 50),
           p.altitude,
-          rand(-50, 50)
+          simRand(-50, 50)
         );
         this.initialPosition.copy(this.group.position);
         break;
@@ -1471,7 +1477,7 @@ class SyntheticContact {
         this.group.position.set(
           -p.crossingDirection * 200,
           p.altitude,
-          rand(-100, 100)
+          simRand(-100, 100)
         );
         this.initialPosition.copy(this.group.position);
         break;
@@ -1521,20 +1527,20 @@ class SyntheticContact {
         p.erraticTimer += dt;
         if (p.erraticTimer >= p.erraticInterval) {
           p.erraticTimer = 0;
-          p.erraticInterval = rand(0.8, 2.5);
-          p.targetAltitude = rand(15, 65);
-          p.speed = (5.5 + state.difficulty * 0.8) * rand(0.6, 1.4);
+          p.erraticInterval = simRand(0.8, 2.5);
+          p.targetAltitude = simRand(15, 65);
+          p.speed = (5.5 + state.difficulty * 0.8) * simRand(0.6, 1.4);
           this.target.set(
-            this.group.position.x + rand(-30, 30),
+            this.group.position.x + simRand(-30, 30),
             p.targetAltitude,
-            this.group.position.z + rand(-30, 30)
+            this.group.position.z + simRand(-30, 30)
           );
         }
         if (!this.target || this.group.position.distanceTo(this.target) < 5) {
           this.target.set(
-            this.group.position.x + rand(-40, 40),
+            this.group.position.x + simRand(-40, 40),
             p.targetAltitude,
-            this.group.position.z + rand(-40, 40)
+            this.group.position.z + simRand(-40, 40)
           );
         }
         break;
