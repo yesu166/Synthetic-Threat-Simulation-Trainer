@@ -2,7 +2,7 @@ import { createSimulationEngine } from "./engine.js";
 import { createScenario, DEFAULT_SCENARIO } from "./scenario.js";
 import { SeededRandom } from "./random.js";
 
-export async function runMonteCarloBenchmark({ runs = 100, seed = "SPECTRA-BENCH", durationSeconds = 8, onProgress } = {}) {
+export async function runMonteCarloBenchmark({ runs = 100, seed = "SPECTRA-BENCH", durationSeconds = 8, onProgress, scenarioOverrides = {} } = {}) {
   const runCount = Math.max(1, Math.min(500, Math.floor(runs)));
   const seconds = Math.max(1, Math.min(120, Number(durationSeconds) || 8));
   const summaries = [];
@@ -10,6 +10,7 @@ export async function runMonteCarloBenchmark({ runs = 100, seed = "SPECTRA-BENCH
     const runSeed = String(seed) + "-" + String(index + 1).padStart(3, "0");
     const scenario = createScenario({
       ...DEFAULT_SCENARIO,
+      ...scenarioOverrides,
       seed: runSeed,
       durationSeconds: seconds,
       contacts: 5
