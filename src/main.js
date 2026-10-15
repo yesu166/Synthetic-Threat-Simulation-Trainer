@@ -134,6 +134,7 @@ const state = {
   falseAlarms: 0,
   reactionSum: 0,
   selectedThreat: null,
+  manualSelectedContactId: null,
   selectedIndex: 0,
   scenarioTime: 0,
   lastDecisionKey: null,
@@ -2200,6 +2201,7 @@ function cycleContact(direction) {
   if (index < 0) index = 0;
   index = (index + direction + active.length) % active.length;
   state.selectedThreat = active[index];
+  state.manualSelectedContactId = state.selectedThreat.id;
   toast(`CONTACT ${String(state.selectedThreat.id).padStart(2, "0")} SELECTED`);
 }
 
@@ -2224,6 +2226,7 @@ function resetScenario(seedOverride) {
   state.scenario.active = true;
   state.afterAction = [];
   state.selectedThreat = null;
+  state.manualSelectedContactId = null;
   if ($("spectraSeed")) $("spectraSeed").value = nextSeed;
   state.score = 0;
   state.detections = 0;
@@ -3348,6 +3351,7 @@ function scoreTraineeDecision(contact, label, observation) {
   
   const truth = truthLabel(contact);
   const correct = label === truth;
+  state.manualSelectedContactId = null;
   spectraEngine.recordDecision({ targetId: String(contact.id), label, confidence: observation.fusion, features: { radarConfidence: observation.radarConfidence, visualConfidence: observation.visualConfidence, rfConfidence: observation.rfConfidence, motionConfidence: observation.motionConfidence, trackQuality: observation.trackQuality, fusionConfidence: observation.fusion, estimatedRangeM: observation.distance, trackUncertaintyM: observation.trackUncertainty, isActionable: observation.isActionable, radarVisible: observation.radarVisible, visualVisible: observation.visualVisible, rfVisible: observation.rfVisible } });
 
   state.decisionCount++;
@@ -3551,6 +3555,18 @@ function updateDetection(dt) {
     if (nearest) {
       nearestDistance = Number.isFinite(nearest.lastObservation?.distance) ? nearest.lastObservation.distance : Infinity;
       nearestObs = nearest.lastObservation;
+    }
+  }
+
+  // Q/E selection persists until the trainee submits a decision or resets the scenario.
+  if (state.manualSelectedContactId !== null) {
+    const manualContact = contacts.find((item) => String(item.id) === String(state.manualSelectedContactId) && item.active);
+    if (manualContact) {
+      nearest = manualContact;
+      nearestObs = manualContact.lastObservation;
+      nearestDistance = Number.isFinite(nearestObs?.distance) ? nearestObs.distance : Infinity;
+    } else {
+      state.manualSelectedContactId = null;
     }
   }
 
